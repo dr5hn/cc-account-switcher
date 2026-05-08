@@ -55,7 +55,7 @@ CCM addresses the most upvoted feature requests in [anthropics/claude-code](http
 ## Features
 
 ### Account Management
-- **Multi-account switching** — add, remove, and switch between Claude Code accounts
+- **Multi-account switching** — add, remove, and switch between Claude Code accounts (OAuth and Google VertexAI)
 - **Account aliases** — friendly names like `work` or `personal` for quick access
 - **Account reorder** — rearrange account positions with automatic credential renaming
 - **Project bindings** — bind directories to accounts, auto-switch with `ccm switch`
@@ -209,8 +209,8 @@ After each switch, restart Claude Code to use the new authentication.
 
 ```bash
 ccm setup                      # Interactive first-run setup wizard
-ccm add                        # Add current Claude Code account
-ccm remove <id>                # Remove by number, email, or alias
+ccm add                        # Add current Claude Code account (auto-detects OAuth or VertexAI)
+ccm remove <id>                # Remove by number, email, project ID, or alias
 ccm switch [id]                # Switch to next, specific, or project-bound account
 ccm switch --isolated <id>     # Switch with isolated CLAUDE_CONFIG_DIR for concurrent sessions
 ccm undo                       # Revert to the previous account
@@ -426,23 +426,25 @@ CCM focuses on account management, operational health, and environment portabili
 
 ## Security
 
-CCM handles OAuth credentials — security is taken seriously:
+CCM handles credentials — security is taken seriously:
 
 - **No `eval`** — all external data (JSON, user input) is processed with safe parsing patterns (`IFS read`, `jq @tsv`), never interpreted as shell code
 - **Atomic writes with restricted permissions** — credential and config files are created with `umask 077` (owner-only from the moment of creation), then atomically moved into place
-- **Input validation at every boundary** — account numbers validated as numeric, emails validated against regex, snapshot names restricted to `[a-zA-Z0-9._-]`, identifiers bounded to 255 chars
+- **Input validation at every boundary** — account numbers validated as numeric, emails validated against regex, GCP project IDs validated against format rules, snapshot names restricted to `[a-zA-Z0-9._-]`, identifiers bounded to 255 chars
 - **Path traversal protection** — all parameters used in file path construction are validated before use
-- **macOS Keychain integration** — credentials stored in the system keychain, not on disk
+- **macOS Keychain integration** — OAuth credentials stored in the system keychain, not on disk. VertexAI credentials stored as env var backups with restricted file permissions
 - **Safe cleanup patterns** — `trap` and `rm` commands use proper quoting and `--` end-of-options markers
+- **Clean account type transitions** — switching between OAuth and VertexAI removes the inactive type's config to prevent credential leakage
 
 ## How It Works
 
 CCM stores account data separately from Claude Code:
 
-- **macOS**: Credentials in Keychain, OAuth config in `~/.claude-switch-backup/`
-- **Linux/WSL**: Both stored in `~/.claude-switch-backup/` with restricted permissions (owner-only via umask 077)
+- **OAuth accounts (macOS)**: Credentials in Keychain, config in `~/.claude-switch-backup/`
+- **OAuth accounts (Linux/WSL)**: Both stored in `~/.claude-switch-backup/` with restricted permissions (owner-only via umask 077)
+- **VertexAI accounts**: Environment variables (project ID, region, service account path, model pins) backed up from `settings.json` to `~/.claude-switch-backup/credentials/`
 
-When switching accounts, CCM backs up the current account, restores the target, and updates Claude Code's auth files. Sessions, settings, and preferences are preserved.
+When switching accounts, CCM backs up the current account, restores the target, and updates Claude Code's auth files. For VertexAI, this means writing/clearing env vars in `settings.json`. Sessions, settings, and preferences are preserved.
 
 ### Storage Locations
 
@@ -481,7 +483,8 @@ ccm clean all          # clean logs, telemetry, cache
 
 ### Cannot add an account
 
-- Ensure you are logged into Claude Code first
+- **OAuth**: Ensure you are logged into Claude Code first
+- **VertexAI**: Ensure `CLAUDE_CODE_USE_VERTEX=1` and `ANTHROPIC_VERTEX_PROJECT_ID` are set in `~/.claude/settings.json` `env` block
 - Verify `jq` is installed: `jq --version`
 - Check write permissions to your home directory
 
@@ -502,7 +505,8 @@ Your current Claude Code login will remain active.
 
 ## Security
 
-- Credentials stored in macOS Keychain or files with 600 permissions
+- OAuth credentials stored in macOS Keychain or files with 600 permissions
+- VertexAI credentials stored as env var backups with restricted permissions
 - Snapshot capture strips tokens/credentials from config files
 - All inputs validated and sanitized before processing
 - No use of `eval` or unsanitized shell calls
