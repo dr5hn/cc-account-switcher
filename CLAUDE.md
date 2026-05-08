@@ -36,32 +36,33 @@ There is no test suite, linter, or build system. Validate changes by running com
 
 The script follows a strict top-to-bottom section layout:
 
-1. **Constants & Utilities** (lines 1–550) — `CCM_VERSION`, color init, platform detection (`detect_platform()` → macos/wsl/linux), JSON helpers, validation functions, `write_json()` (atomic: temp file → validate → mv)
+1. **Constants & Utilities** (lines 1–460) — `CCM_VERSION`, color init, platform detection (`detect_platform()` → macos/wsl/linux), JSON helpers, validation functions (`validate_email()`, `validate_vertex_project_id()`), `write_json()` (atomic: temp file → validate → mv)
 2. **Credential Management** (lines 261–370) — macOS uses Keychain, Linux/WSL uses file-based storage with atomic writes (temp + mv). `read_credentials()`/`write_credentials()` are platform-dispatched
-3. **Sequence & Cache** (lines 370–550) — `sequence.json` is the account registry (schema v3.1, auto-migrates from v1/v2/v3). `resolve_account_identifier()` matches by number, email, or alias. Bindings stored in `sequence.json` under `"bindings"` key
-4. **Session Management** (lines 550–1160) — `session list|info|search|relocate|clean|archive|restore|archives`. Path encoding: `/` → `-` for directory names under `~/.claude/projects/`
-5. **Account Management** (lines 1160–2800) — Switching (checks project bindings first, supports `--isolated [--quiet]` for CLAUDE_CONFIG_DIR profiles), reordering (two-pass credential rename with pre-validated JSON), bind/unbind, shell hook (`ccm hook [--isolated]`), export/import
-6. **Help System** (lines 2870–3350) — Topic-based help with `show_help()`, covers all modules including profiles, watch, recover, setup
-7. **Environment Snapshots** (lines 3350–3755) — Capture/restore settings.json, MCP config, CLAUDE.md (strips tokens on save)
-8. **Usage Module** (lines 3755–4345) — `usage summary|top|history|dashboard|compare` (history parses JSONL for token analytics using jq, dashboard attributes usage to accounts via switch history)
-9. **Health & Maintenance** (lines 4345–5330) — `doctor` (13 checks), `clean` (9 targets + all), `permissions audit` (duplicate/dead rule detection)
-10. **Profiles Module** (lines 5333–5535) — `switch_isolated [--quiet]` creates CLAUDE_CONFIG_DIR profiles (quiet mode prints only the path for hook use), `cmd_profiles` routes list/sync/delete
-11. **Watch Module** (lines 5536–5724) — `cmd_watch` routes start/stop/status, background polling of `rate-limits.json`
-12. **Usage Dashboard Module** (lines 5725–5942) — `usage_dashboard` with per-account token attribution, `format_token_count` helper
-13. **Session Archive Module** (lines 5943–6144) — `session_archive` compresses old JSONL to tar.gz, `session_restore`, `session_archives_list`
-14. **Setup Module** (lines 6145–6296) — `cmd_setup` interactive first-run wizard (6 steps)
-15. **Recover Module** (lines 6297–6409) — `cmd_recover` checks credential consistency (4 checks)
-16. **Statusline Module** (lines 6410–6691) — `statusline install|remove` generates a bash script that reads Claude Code session JSON via stdin, writes rate-limits.json for the watcher
-17. **Init Module** (lines 6693–6889) — `init` auto-generates `.claudeignore` by detecting project type from manifest files
-18. **Permissions Module** (lines 6890–7050) — `permissions audit [--fix]` scans settings.json for duplicate/contradictory/dead rules
-19. **Main Entry** (lines 7050–7115) — `--no-color` parsing, dependency checks, case-based command dispatch with deprecation notices for removed commands
+3. **VertexAI Account Helpers** (lines 461–640) — `get_account_type()`, `get_account_display_id()`, `get_current_account_type()`, `read_vertex_env()`/`write_vertex_env()`/`clear_vertex_env()`, credential backup/restore for VertexAI env vars, `account_exists_by_project()`
+4. **Sequence & Cache** (lines 640–800) — `sequence.json` is the account registry (schema v4.0, auto-migrates from v1/v2/v3/v3.1). `resolve_account_identifier()` matches by number, email, project ID, or alias. Bindings stored in `sequence.json` under `"bindings"` key
+5. **Session Management** (lines 800–1400) — `session list|info|search|relocate|clean|archive|restore|archives`. Path encoding: `/` → `-` for directory names under `~/.claude/projects/`
+6. **Account Management** (lines 1400–3300) — Switching (type-aware: OAuth↔OAuth, OAuth↔Vertex, Vertex↔Vertex), reordering (two-pass credential rename with pre-validated JSON), bind/unbind, shell hook (`ccm hook [--isolated]`), export/import. `perform_switch()` dispatches to `_switch_oauth_to_oauth`, `_switch_oauth_to_vertex`, `_switch_vertex_to_oauth`, `_switch_vertex_to_vertex`
+7. **Help System** (lines 3300–3930) — Topic-based help with `show_help()`, covers all modules including profiles, watch, recover, setup
+8. **Environment Snapshots** (lines 3930–4330) — Capture/restore settings.json, MCP config, CLAUDE.md (strips tokens on save)
+9. **Usage Module** (lines 4330–4920) — `usage summary|top|history|dashboard|compare` (history parses JSONL for token analytics using jq, dashboard attributes usage to accounts via switch history)
+10. **Health & Maintenance** (lines 4920–5910) — `doctor` (13 checks), `clean` (9 targets + all), `permissions audit` (duplicate/dead rule detection)
+11. **Profiles Module** (lines 5910–6170) — `switch_isolated [--quiet]` creates CLAUDE_CONFIG_DIR profiles (quiet mode prints only the path for hook use), type-aware for OAuth/VertexAI, `cmd_profiles` routes list/sync/delete
+12. **Watch Module** (lines 6170–6360) — `cmd_watch` routes start/stop/status, background polling of `rate-limits.json`
+13. **Usage Dashboard Module** (lines 6360–6575) — `usage_dashboard` with per-account token attribution, `format_token_count` helper
+14. **Session Archive Module** (lines 6575–6780) — `session_archive` compresses old JSONL to tar.gz, `session_restore`, `session_archives_list`
+15. **Setup Module** (lines 6780–6935) — `cmd_setup` interactive first-run wizard (6 steps), auto-detects VertexAI sessions
+16. **Recover Module** (lines 6935–7100) — `cmd_recover` checks credential consistency (4 checks), type-aware for OAuth/VertexAI
+17. **Statusline Module** (lines 7100–7440) — `statusline install|remove` generates a bash script that reads Claude Code session JSON via stdin, writes rate-limits.json for the watcher. Detects VertexAI via `CLAUDE_CODE_USE_VERTEX` in settings.json
+18. **Init Module** (lines 7440–7640) — `init` auto-generates `.claudeignore` by detecting project type from manifest files
+19. **Permissions Module** (lines 7640–7794) — `permissions audit [--fix]` scans settings.json for duplicate/contradictory/dead rules
+20. **Main Entry** (lines 7794–7864) — `--no-color` parsing, dependency checks, case-based command dispatch with deprecation notices for removed commands
 
 ### Data layout
 
 ```
 ~/.claude-switch-backup/
-├── sequence.json              # Account registry (metadata, history, aliases, bindings)
-├── credentials/               # Per-account OAuth backups (atomic writes)
+├── sequence.json              # Account registry (metadata, history, aliases, bindings, account types)
+├── credentials/               # Per-account backups: OAuth creds + VertexAI env vars (atomic writes)
 ├── configs/                   # Per-account config backups
 ├── snapshots/                 # Environment snapshots
 ├── profiles/                  # Isolated CLAUDE_CONFIG_DIR profiles (NEW in v4.0)
@@ -91,6 +92,8 @@ The script follows a strict top-to-bottom section layout:
 - **Orphan detection**: Process orphan detection (`ppid == 1`) is gated to macOS only — unreliable on Linux/WSL where systemd children legitimately have ppid=1
 - **CLAUDE_CONFIG_DIR isolation**: Profiles create complete config directories that Claude Code reads via the `CLAUDE_CONFIG_DIR` env var, enabling true concurrent sessions
 - **Statusline as data bridge**: The statusline script writes rate limit data to `rate-limits.json` on every prompt render, which the `ccm watch` background process polls
+- **Account type discrimination**: Each account has a `type` field (`"oauth"` or `"vertex"`). VertexAI accounts use env vars in `settings.json` instead of OAuth credentials. `get_current_account_type()` checks `CLAUDE_CODE_USE_VERTEX` in settings.json to determine active type
+- **Clean switch pattern**: Switching between OAuth and VertexAI removes the inactive type's config (`.oauthAccount` or VertexAI env vars) to prevent ambiguity
 
 ## Version Bumping
 
@@ -150,7 +153,7 @@ Removed commands show deprecation notices with migration instructions.
 
 - Commit format: `<type>: <description>` (e.g., `feat:`, `fix:`, `docs:`, `chore:`)
 - Dependencies: bash 4.4+, jq, curl (checked at startup via `check_dependencies()`)
-- All user input validated before use (emails, snapshot names, JSON, numeric args)
+- All user input validated before use (emails, GCP project IDs, snapshot names, JSON, numeric args)
 - Destructive operations require `--dry-run` support or confirmation prompts
 - Backups created before modifying `settings.json` in `permissions audit --fix`
 - `--no-color` flag disables all ANSI output globally
