@@ -1,6 +1,6 @@
 ---
 name: ccm
-description: Claude Code Manager — manage accounts, sessions, environments, and optimize token usage. Use when the user mentions switching Claude accounts, cleaning up sessions, environment snapshots, disk usage, token optimization, Claude Code health check, orphaned sessions, orphaned processes, tmp files, MCP audit, project bindings, session search, token usage history, account reorder, profiles, isolated, concurrent sessions, CLAUDE_CONFIG_DIR, isolated hook, watch, rate limit, auto-switch, dashboard, session archive, setup wizard, recover, usage dashboard, usage compare, claudeignore, permission rules, statusline, status bar, or says "ccm", "doctor", "clean cache", "clean tmp", "session list", "session search", "env snapshot", "bind", "unbind", "reorder", "usage history", "init", "permissions audit", "statusline", "ccm watch", "ccm profiles", "ccm setup", "ccm recover", "ccm hook", "hook --isolated".
+description: Claude Code Manager — manage accounts (OAuth + Google VertexAI), sessions, environments, and optimize token usage. Use when the user mentions switching Claude accounts, cleaning up sessions, environment snapshots, disk usage, token optimization, Claude Code health check, orphaned sessions, orphaned processes, tmp files, MCP audit, project bindings, session search, token usage history, account reorder, profiles, isolated, concurrent sessions, CLAUDE_CONFIG_DIR, isolated hook, watch, rate limit, auto-switch, dashboard, session archive, setup wizard, recover, usage dashboard, usage compare, claudeignore, permission rules, statusline, status bar, VertexAI, vertex, GCP project, or says "ccm", "doctor", "clean cache", "clean tmp", "session list", "session search", "env snapshot", "bind", "unbind", "reorder", "usage history", "init", "permissions audit", "statusline", "ccm watch", "ccm profiles", "ccm setup", "ccm recover", "ccm hook", "hook --isolated".
 allowed-tools: Bash(ccm *), Bash(~/.ccm/bin/ccm *), Bash(curl -fsSL *install.sh*)
 ---
 
@@ -32,8 +32,8 @@ This installs to `~/.ccm/bin/ccm` — no sudo required. After install, the user 
 
 | Command | Description |
 |---------|-------------|
-| `ccm add` | Add current logged-in Claude account |
-| `ccm remove <id>` | Remove account by number, email, or alias |
+| `ccm add` | Add current Claude account (auto-detects OAuth or VertexAI) |
+| `ccm remove <id>` | Remove account by number, email, project ID, or alias |
 | `ccm switch [id]` | Switch to next account, specific, or project-bound |
 | `ccm undo` | Revert to previous account |
 | `ccm list` | List all managed accounts and project bindings |
@@ -249,6 +249,9 @@ ccm env restore before-experiment  # if things break
 ## 4. Important Notes
 
 - After switching accounts, restart Claude Code for changes to take effect
+- `ccm add` auto-detects OAuth vs VertexAI from `settings.json` env vars — no manual type selection needed
+- VertexAI accounts display as `vertex:project-id` in all output
+- Switching between OAuth and VertexAI performs a clean transition (removes inactive type's config)
 - `ccm doctor --fix` only removes data older than 30 days — recent data is never touched
 - Environment snapshots do NOT capture credentials — only configuration
 - Use `ccm switch --isolated` for concurrent sessions in different terminals
