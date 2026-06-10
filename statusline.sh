@@ -174,23 +174,49 @@ fi
 SEQ="$HOME/.claude-switch-backup/sequence.json"
 CONF="$HOME/.claude/.claude.json"
 [[ -f "$CONF" ]] || CONF="$HOME/.claude.json"
+SETTINGS="$HOME/.claude/settings.json"
+[[ -n "${CLAUDE_CONFIG_DIR:-}" ]] && [[ -f "$CLAUDE_CONFIG_DIR/settings.json" ]] && SETTINGS="$CLAUDE_CONFIG_DIR/settings.json"
 
 ALIAS="" EMAIL_SHORT="" HEALTH="" TOTAL_ACCTS=0
-if [[ -f "$SEQ" ]] && [[ -f "$CONF" ]]; then
-    # Use CLAUDE_CODE_USER_EMAIL env var if available (v2.1.51+), fall back to config file
-    EMAIL="${CLAUDE_CODE_USER_EMAIL:-}"
-    [[ -z "$EMAIL" ]] && EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$CONF" 2>/dev/null)
-    if [[ -n "$EMAIL" ]]; then
-        EMAIL_SHORT="$EMAIL"
-        ACCT_DATA=$(jq -r --arg e "$EMAIL" '
-            .accounts | to_entries[] | select(.value.email == $e) |
-            "\(.value.alias // "")\t\(.value.healthStatus // "unknown")"
-        ' "$SEQ" 2>/dev/null)
-        if [[ -n "$ACCT_DATA" ]]; then
-            ALIAS=$(echo "$ACCT_DATA" | cut -f1)
-            HEALTH=$(echo "$ACCT_DATA" | cut -f2)
+if [[ -f "$SEQ" ]]; then
+    # Detect VertexAI vs OAuth
+    IS_VERTEX=0
+    if [[ -f "$SETTINGS" ]]; then
+        VF=$(jq -r '.env.CLAUDE_CODE_USE_VERTEX // empty' "$SETTINGS" 2>/dev/null)
+        [[ "$VF" == "1" ]] && IS_VERTEX=1
+    fi
+
+    if [[ "$IS_VERTEX" -eq 1 ]]; then
+        # VertexAI: identity is project ID from settings.json
+        PID=$(jq -r '.env.ANTHROPIC_VERTEX_PROJECT_ID // empty' "$SETTINGS" 2>/dev/null)
+        if [[ -n "$PID" ]]; then
+            EMAIL_SHORT="vertex:$PID"
+            ACCT_DATA=$(jq -r --arg pid "$PID" '
+                .accounts | to_entries[] | select(.value.projectId == $pid) |
+                "\(.value.alias // "")\t\(.value.healthStatus // "unknown")"
+            ' "$SEQ" 2>/dev/null)
+            if [[ -n "$ACCT_DATA" ]]; then
+                ALIAS=$(echo "$ACCT_DATA" | cut -f1)
+                HEALTH=$(echo "$ACCT_DATA" | cut -f2)
+            fi
+            TOTAL_ACCTS=$(jq '.accounts | length' "$SEQ" 2>/dev/null || echo "0")
         fi
-        TOTAL_ACCTS=$(jq '.accounts | length' "$SEQ" 2>/dev/null || echo "0")
+    elif [[ -f "$CONF" ]]; then
+        # OAuth: identity is email from .claude.json
+        EMAIL="${CLAUDE_CODE_USER_EMAIL:-}"
+        [[ -z "$EMAIL" ]] && EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$CONF" 2>/dev/null)
+        if [[ -n "$EMAIL" ]]; then
+            EMAIL_SHORT="$EMAIL"
+            ACCT_DATA=$(jq -r --arg e "$EMAIL" '
+                .accounts | to_entries[] | select(.value.email == $e) |
+                "\(.value.alias // "")\t\(.value.healthStatus // "unknown")"
+            ' "$SEQ" 2>/dev/null)
+            if [[ -n "$ACCT_DATA" ]]; then
+                ALIAS=$(echo "$ACCT_DATA" | cut -f1)
+                HEALTH=$(echo "$ACCT_DATA" | cut -f2)
+            fi
+            TOTAL_ACCTS=$(jq '.accounts | length' "$SEQ" 2>/dev/null || echo "0")
+        fi
     fi
 fi
 

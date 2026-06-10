@@ -1,1593 +1,2192 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CCM — Claude Code Manager</title>
-<meta name="description" content="The power-user toolkit for Claude Code v4.0. Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival, setup wizard — plus multi-account management, project bindings, and disk cleanup. Open source CLI for macOS, Linux, WSL.">
-<meta name="keywords" content="Claude Code, account manager, CLI tool, multi-account, session management, token usage, environment snapshots, token optimization, developer tools, project bindings">
-<meta name="author" content="Darshan Gada">
-<link rel="canonical" href="https://github.com/dr5hn/ccm">
-
-<!-- Open Graph -->
-<meta property="og:type" content="website">
-<meta property="og:title" content="CCM — Claude Code Manager">
-<meta property="og:description" content="CCM v4.0 — concurrent sessions, rate limit auto-switch, per-account dashboards, session archival. Manage multiple Claude Code accounts from one terminal.">
-<meta property="og:image" content="https://raw.githubusercontent.com/dr5hn/ccm/main/og-image.svg">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta property="og:url" content="https://github.com/dr5hn/ccm">
-<meta property="og:site_name" content="CCM">
-
-<!-- Twitter Card -->
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="CCM — Claude Code Manager">
-<meta name="twitter:description" content="CCM v4.0 — concurrent sessions, rate limit auto-switch, per-account dashboards, session archival. The power-user toolkit for Claude Code.">
-<meta name="twitter:image" content="https://raw.githubusercontent.com/dr5hn/ccm/main/og-image.svg">
-
-<!-- Structured Data -->
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "CCM — Claude Code Manager",
-  "description": "CCM v4.0 — the power-user toolkit for Claude Code. Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival, setup wizard, plus multi-account management from the terminal.",
-  "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "macOS, Linux, WSL",
-  "offers": {
-    "@type": "Offer",
-    "price": "0",
-    "priceCurrency": "USD"
-  },
-  "license": "https://opensource.org/licenses/MIT",
-  "url": "https://github.com/dr5hn/ccm",
-  "codeRepository": "https://github.com/dr5hn/ccm",
-  "programmingLanguage": "Bash",
-  "author": {
-    "@type": "Person",
-    "name": "Darshan Gada",
-    "url": "https://github.com/dr5hn"
-  },
-  "softwareRequirements": "Bash 4.4+, jq",
-  "installUrl": "https://raw.githubusercontent.com/dr5hn/ccm/main/install.sh"
-}
-</script>
-
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-
-:root {
-  --bg-primary: #0a0f1a;
-  --bg-secondary: #0d1117;
-  --bg-card: rgba(255,255,255,0.03);
-  --border-card: rgba(255,255,255,0.06);
-  --border-glow: rgba(56,189,248,0.3);
-  --accent-cyan: #38bdf8;
-  --accent-violet: #818cf8;
-  --accent-green: #4ade80;
-  --accent-amber: #f59e0b;
-  --text-primary: #e2e8f0;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --terminal-bg: #0f172a;
-  --terminal-bar: #1e293b;
-}
-
-html { font-size: 16px; scroll-behavior: smooth; }
-
-body {
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: 'Inter', sans-serif;
-  line-height: 1.6;
-  overflow-x: hidden;
-  min-height: 100vh;
-}
-
-/* ── Shared layout ── */
-.container {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 0 24px;
-}
-
-/* ── Shared typography ── */
-.section-label {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 16px;
-}
-
-/* ── Glassmorphism card ── */
-.glass-card {
-  background: var(--bg-card);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid var(--border-card);
-  border-radius: 12px;
-  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
-}
-
-.glass-card:hover {
-  border-color: var(--border-glow);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 30px rgba(0,0,0,0.3);
-}
-
-/* ── Gradient text ── */
-.gradient-text {
-  background: linear-gradient(135deg, #e2e8f0 0%, #38bdf8 50%, #818cf8 100%);
-  background-clip: text;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-/* ── Terminal window chrome ── */
-.terminal-window {
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow:
-    0 25px 60px rgba(0,0,0,0.5),
-    0 0 40px rgba(56,189,248,0.06);
-  border: 1px solid rgba(255,255,255,0.08);
-}
-
-.terminal-titlebar {
-  background: var(--terminal-bar);
-  padding: 10px 16px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.terminal-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-}
-
-.terminal-dot.red    { background: #ef4444; }
-.terminal-dot.yellow { background: #eab308; }
-.terminal-dot.green  { background: #22c55e; }
-
-.terminal-title {
-  flex: 1;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
-}
-
-.terminal-body {
-  background: var(--terminal-bg);
-  padding: 20px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 13px;
-  line-height: 1.8;
-}
-
-/* ── Hero section ── */
-.hero {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  position: relative;
-  overflow: hidden;
-  padding: 60px 24px;
-}
-
-.hero-bg {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(135deg, var(--bg-primary) 0%, #0d1220 40%, var(--bg-secondary) 100%);
-}
-
-.hero-orb {
-  position: absolute;
-  border-radius: 50%;
-  pointer-events: none;
-  animation: orb-drift 20s ease-in-out infinite alternate;
-}
-
-.hero-orb--cyan {
-  top: -150px;
-  left: -150px;
-  width: 500px;
-  height: 500px;
-  background: radial-gradient(circle, rgba(56,189,248,0.08) 0%, transparent 70%);
-}
-
-.hero-orb--violet {
-  bottom: -150px;
-  right: -150px;
-  width: 500px;
-  height: 500px;
-  background: radial-gradient(circle, rgba(129,140,248,0.08) 0%, transparent 70%);
-}
-
-@keyframes orb-drift {
-  0%   { transform: translate(0, 0); }
-  100% { transform: translate(30px, -20px); }
-}
-
-.hero-content {
-  position: relative;
-  z-index: 1;
-  max-width: 800px;
-}
-
-.hero-ascii {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 16px;
-  line-height: 1.2;
-  margin-bottom: 20px;
-  white-space: pre;
-  overflow: hidden;
-}
-
-.hero-badge {
-  display: inline-block;
-  padding: 4px 14px;
-  border-radius: 20px;
-  border: 1px solid rgba(56,189,248,0.3);
-  background: rgba(56,189,248,0.08);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  color: var(--accent-cyan);
-  margin-bottom: 24px;
-}
-
-.hero-headline {
-  font-size: 48px;
-  font-weight: 800;
-  line-height: 1.1;
-  margin-bottom: 16px;
-  max-width: 700px;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.hero-sub {
-  font-size: 17px;
-  color: var(--text-secondary);
-  max-width: 560px;
-  margin: 0 auto 28px;
-  line-height: 1.6;
-}
-
-.hero-ctas {
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-  margin-bottom: 20px;
-  flex-wrap: wrap;
-}
-
-.btn-primary {
-  display: inline-block;
-  padding: 10px 28px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-violet));
-  color: var(--bg-primary);
-  font-size: 14px;
-  font-weight: 600;
-  text-decoration: none;
-  transition: opacity 0.2s, transform 0.2s;
-}
-
-.btn-primary:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
-}
-
-.btn-secondary {
-  display: inline-block;
-  padding: 10px 28px;
-  border-radius: 8px;
-  border: 1px solid rgba(226,232,240,0.15);
-  color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 500;
-  text-decoration: none;
-  transition: border-color 0.2s, transform 0.2s;
-}
-
-.btn-secondary:hover {
-  border-color: rgba(226,232,240,0.3);
-  transform: translateY(-1px);
-}
-
-.hero-install {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 18px;
-  border-radius: 8px;
-  background: rgba(30,41,59,0.8);
-  border: 1px solid rgba(56,189,248,0.15);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin-bottom: 48px;
-  cursor: pointer;
-  transition: border-color 0.2s;
-}
-
-.hero-install:hover {
-  border-color: rgba(56,189,248,0.4);
-}
-
-.hero-install .prompt {
-  color: var(--text-muted);
-}
-
-.hero-install .cmd {
-  color: var(--text-primary);
-}
-
-.hero-install .copy-divider {
-  width: 1px;
-  height: 16px;
-  background: rgba(255,255,255,0.1);
-}
-
-.hero-install .copy-text {
-  color: var(--accent-cyan);
-  font-size: 11px;
-}
-
-.hero-terminal {
-  max-width: 620px;
-  margin: 0 auto;
-}
-
-.hero::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 10%;
-  right: 10%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(56,189,248,0.2), transparent);
-}
-
-/* ══════════════ THE PROBLEM ══════════════ */
-.problem {
-  padding: 80px 24px;
-  text-align: center;
-}
-
-.problem-statement {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin-bottom: 32px;
-}
-
-.pain-points {
-  display: flex;
-  gap: 32px;
-  justify-content: center;
-  margin-bottom: 32px;
-}
-
-.pain-point {
-  flex: 1;
-  max-width: 240px;
-}
-
-.pain-icon {
-  font-size: 24px;
-  color: var(--text-muted);
-  margin-bottom: 8px;
-}
-
-.pain-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
-.pain-desc {
-  font-size: 14px;
-  color: var(--text-muted);
-  line-height: 1.5;
-}
-
-.problem-transition {
-  font-size: 15px;
-  color: var(--text-muted);
-}
-
-/* ══════════════ TERMINAL DEMO ══════════════ */
-.demo {
-  padding: 80px 24px;
-  position: relative;
-}
-
-.demo::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
-  background-size: 40px 40px;
-  pointer-events: none;
-}
-
-.demo .container { position: relative; z-index: 1; }
-
-.demo-tabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 16px;
-  justify-content: center;
-}
-
-.demo-tab {
-  padding: 8px 20px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 13px;
-  color: var(--text-muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.demo-tab:hover {
-  color: var(--text-secondary);
-  background: rgba(255,255,255,0.03);
-}
-
-.demo-tab.active {
-  color: var(--accent-cyan);
-  background: rgba(56,189,248,0.08);
-  border-color: rgba(56,189,248,0.2);
-}
-
-.demo-terminal {
-  max-width: 720px;
-  margin: 0 auto;
-}
-
-.demo-terminal .terminal-body {
-  min-height: 300px;
-}
-
-.term-line {
-  opacity: 0;
-  transform: translateY(2px);
-  transition: opacity 0.15s, transform 0.15s;
-}
-
-.term-line.visible {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.t-prompt { color: var(--text-muted); }
-.t-cmd { color: var(--text-primary); }
-.t-output { color: var(--text-secondary); }
-.t-success { color: var(--accent-green); }
-.t-muted { color: var(--text-muted); opacity: 0.7; }
-.t-warn { color: var(--accent-amber); }
-.t-active { color: var(--accent-green); }
-
-/* ══════════════ FEATURES ══════════════ */
-.features {
-  padding: 80px 24px;
-}
-
-.features-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-}
-
-.feature-card {
-  padding: 24px;
-}
-
-.feature-icon {
-  font-size: 32px;
-  color: var(--accent-cyan);
-  margin-bottom: 12px;
-  font-family: 'JetBrains Mono', monospace;
-}
-
-.feature-name {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 4px;
-}
-
-.feature-cmd {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 13px;
-  color: var(--accent-cyan);
-  margin-bottom: 10px;
-}
-
-.feature-desc {
-  font-size: 15px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-
-/* ══════════════ HOW IT WORKS ══════════════ */
-.how-it-works {
-  padding: 80px 24px;
-  text-align: center;
-}
-
-.steps {
-  display: flex;
-  gap: 40px;
-  justify-content: center;
-  align-items: flex-start;
-  position: relative;
-  max-width: 800px;
-  margin: 0 auto;
-}
-
-.steps::before {
-  content: '';
-  position: absolute;
-  top: 18px;
-  left: 20%;
-  right: 20%;
-  height: 1px;
-  border-top: 2px dashed rgba(56,189,248,0.2);
-}
-
-.step {
-  flex: 1;
-  position: relative;
-  z-index: 1;
-}
-
-.step-number {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  background-image: linear-gradient(var(--bg-primary), var(--bg-primary)), linear-gradient(135deg, var(--accent-cyan), var(--accent-violet));
-  background-origin: border-box;
-  background-clip: padding-box, border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 14px;
-  color: var(--accent-cyan);
-  margin: 0 auto 12px;
-}
-
-.step-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 6px;
-}
-
-.step-cmd {
-  display: inline-block;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  color: var(--accent-cyan);
-  background: rgba(56,189,248,0.08);
-  padding: 2px 8px;
-  border-radius: 4px;
-  margin-bottom: 8px;
-}
-
-.step-desc {
-  font-size: 14px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-}
-
-/* ══════════════ INSTALL ══════════════ */
-.install {
-  padding: 80px 24px;
-  text-align: center;
-}
-
-.install-box {
-  max-width: 680px;
-  margin: 0 auto 12px;
-  padding: 18px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  cursor: pointer;
-}
-
-.install-text {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 13px;
-  color: var(--text-primary);
-  text-align: left;
-  word-break: break-all;
-}
-
-.install-text .prompt { color: var(--text-muted); }
-
-.copy-btn {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  color: var(--accent-cyan);
-  background: rgba(56,189,248,0.08);
-  border: 1px solid rgba(56,189,248,0.2);
-  padding: 4px 14px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-
-.copy-btn:hover {
-  background: rgba(56,189,248,0.15);
-}
-
-.install-note {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-}
-
-.install-alt {
-  font-size: 12px;
-  color: var(--text-muted);
-  opacity: 0.7;
-}
-
-.install-alt code {
-  font-family: 'JetBrains Mono', monospace;
-  color: var(--text-secondary);
-}
-
-/* ══════════════ SOCIAL PROOF ══════════════ */
-.social-proof {
-  padding: 32px 24px;
-  text-align: center;
-  border-top: 1px solid rgba(255,255,255,0.04);
-  border-bottom: 1px solid rgba(255,255,255,0.04);
-}
-
-.proof-items {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 24px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
-}
-
-.proof-divider {
-  color: rgba(255,255,255,0.1);
-}
-
-/* ══════════════ FOOTER ══════════════ */
-.footer {
-  padding: 40px 24px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.footer a {
-  color: var(--text-secondary);
-  text-decoration: none;
-  transition: color 0.2s;
-}
-
-.footer a:hover {
-  color: var(--accent-cyan);
-}
-
-/* ══════════════ COMMAND REFERENCE ══════════════ */
-.commands {
-  padding: 80px 24px;
-}
-
-.cmd-group {
-  margin-bottom: 8px;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.cmd-group-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 20px;
-  cursor: pointer;
-  transition: background 0.2s;
-  background: var(--bg-card);
-  border: 1px solid var(--border-card);
-  border-radius: 8px;
-}
-
-.cmd-group.open .cmd-group-header {
-  border-radius: 8px 8px 0 0;
-  border-bottom-color: transparent;
-}
-
-.cmd-group-header:hover {
-  background: rgba(255,255,255,0.05);
-}
-
-.cmd-group-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.cmd-group-meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.cmd-count {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  color: var(--text-muted);
-  background: rgba(255,255,255,0.05);
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-
-.cmd-chevron {
-  color: var(--text-muted);
-  transition: transform 0.3s;
-  font-size: 12px;
-}
-
-.cmd-group.open .cmd-chevron {
-  transform: rotate(180deg);
-}
-
-.cmd-group-body {
-  max-height: 0;
-  overflow: hidden;
-  transition: max-height 0.3s ease;
-  border: 1px solid var(--border-card);
-  border-top: none;
-  border-radius: 0 0 8px 8px;
-}
-
-.cmd-group.open .cmd-group-body {
-  max-height: 600px;
-}
-
-.cmd-table {
-  width: 100%;
-  padding: 12px 20px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-}
-
-.cmd-table tr {
-  border-bottom: 1px solid rgba(255,255,255,0.03);
-}
-
-.cmd-table tr:last-child {
-  border-bottom: none;
-}
-
-.cmd-table td {
-  padding: 6px 0;
-  vertical-align: top;
-}
-
-.cmd-table td:first-child {
-  color: var(--text-primary);
-  white-space: nowrap;
-  padding-right: 24px;
-  width: 280px;
-}
-
-.cmd-table td:last-child {
-  color: var(--text-muted);
-}
-
-/* ══════════════ SCROLL REVEAL ══════════════ */
-.reveal {
-  opacity: 0;
-  transform: translateY(20px);
-  transition: opacity 0.6s ease, transform 0.6s ease;
-}
-
-.reveal.visible {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-/* ══════════════ ACCESSIBILITY ══════════════ */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-  .reveal {
-    opacity: 1;
-    transform: none;
-  }
-  .term-line {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-/* ══════════════ RESPONSIVE ══════════════ */
-@media (max-width: 768px) {
-  .hero { padding: 40px 20px; min-height: auto; }
-  .hero-ascii { font-size: 10px; }
-  .hero-headline { font-size: 32px; }
-  .hero-install { font-size: 11px; flex-wrap: wrap; justify-content: center; }
-  .pain-points { flex-direction: column; align-items: center; }
-  .features-grid { grid-template-columns: 1fr 1fr; }
-  @media (max-width: 560px) { .features-grid { grid-template-columns: 1fr; } }
-  .steps {
-    flex-direction: column;
-    gap: 32px;
-    align-items: flex-start;
-    padding-left: 56px;
-  }
-  .steps::before {
-    left: 18px;
-    right: auto;
-    top: 36px;
-    bottom: 36px;
-    width: 0;
-    height: auto;
-    border-top: none;
-    border-left: 2px dashed rgba(56,189,248,0.2);
-  }
-  .step { text-align: left; }
-  .step-number {
-    position: absolute;
-    left: -56px;
-    top: 0;
-  }
-  .demo-tabs { flex-wrap: wrap; justify-content: center; }
-  .demo-terminal .terminal-body { font-size: 11px; overflow-x: auto; }
-  .install-box { flex-direction: column; align-items: stretch; text-align: center; }
-  .cmd-table td:first-child { width: auto; white-space: normal; }
-}
-
-@media (max-width: 480px) {
-  .hero-headline { font-size: 26px; }
-  .hero-sub { font-size: 15px; }
-  .hero-install .cmd { font-size: 10px; word-break: break-all; }
-  .problem-statement { font-size: 22px; }
-}
-</style>
-</head>
-<body>
-  <section class="hero" id="hero">
-    <div class="hero-bg">
-      <div class="hero-orb hero-orb--cyan"></div>
-      <div class="hero-orb hero-orb--violet"></div>
-    </div>
-    <div class="hero-content">
-      <pre class="hero-ascii gradient-text" aria-hidden="true"> ██████╗ ██████╗███╗   ███╗
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CCM — Claude Code Manager</title>
+    <meta
+      name="description"
+      content="The power-user toolkit for Claude Code v4.0. Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival, setup wizard — plus multi-account management, project bindings, and disk cleanup. Open source CLI for macOS, Linux, WSL."
+    />
+    <meta
+      name="keywords"
+      content="Claude Code, account manager, CLI tool, multi-account, session management, token usage, environment snapshots, token optimization, developer tools, project bindings"
+    />
+    <meta name="author" content="Darshan Gada" />
+    <link rel="canonical" href="https://github.com/dr5hn/ccm" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="CCM — Claude Code Manager" />
+    <meta
+      property="og:description"
+      content="CCM v4.0 — concurrent sessions, rate limit auto-switch, per-account dashboards, session archival. Manage multiple Claude Code accounts from one terminal."
+    />
+    <meta
+      property="og:image"
+      content="https://raw.githubusercontent.com/dr5hn/ccm/main/og-image.svg"
+    />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:url" content="https://github.com/dr5hn/ccm" />
+    <meta property="og:site_name" content="CCM" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="CCM — Claude Code Manager" />
+    <meta
+      name="twitter:description"
+      content="CCM v4.0 — concurrent sessions, rate limit auto-switch, per-account dashboards, session archival. The power-user toolkit for Claude Code."
+    />
+    <meta
+      name="twitter:image"
+      content="https://raw.githubusercontent.com/dr5hn/ccm/main/og-image.svg"
+    />
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "CCM — Claude Code Manager",
+        "description": "CCM v4.0 — the power-user toolkit for Claude Code. Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival, setup wizard, plus multi-account management from the terminal.",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Linux, WSL",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "license": "https://opensource.org/licenses/MIT",
+        "url": "https://github.com/dr5hn/ccm",
+        "codeRepository": "https://github.com/dr5hn/ccm",
+        "programmingLanguage": "Bash",
+        "author": {
+          "@type": "Person",
+          "name": "Darshan Gada",
+          "url": "https://github.com/dr5hn"
+        },
+        "softwareRequirements": "Bash 4.4+, jq",
+        "installUrl": "https://raw.githubusercontent.com/dr5hn/ccm/main/install.sh"
+      }
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      :root {
+        --bg-primary: #0a0f1a;
+        --bg-secondary: #0d1117;
+        --bg-card: rgba(255, 255, 255, 0.03);
+        --border-card: rgba(255, 255, 255, 0.06);
+        --border-glow: rgba(56, 189, 248, 0.3);
+        --accent-cyan: #38bdf8;
+        --accent-violet: #818cf8;
+        --accent-green: #4ade80;
+        --accent-amber: #f59e0b;
+        --text-primary: #e2e8f0;
+        --text-secondary: #94a3b8;
+        --text-muted: #64748b;
+        --terminal-bg: #0f172a;
+        --terminal-bar: #1e293b;
+      }
+
+      html {
+        font-size: 16px;
+        scroll-behavior: smooth;
+      }
+
+      body {
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        font-family: "Inter", sans-serif;
+        line-height: 1.6;
+        overflow-x: hidden;
+        min-height: 100vh;
+      }
+
+      /* ── Shared layout ── */
+      .container {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 0 24px;
+      }
+
+      /* ── Shared typography ── */
+      .section-label {
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 16px;
+      }
+
+      /* ── Glassmorphism card ── */
+      .glass-card {
+        background: var(--bg-card);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid var(--border-card);
+        border-radius: 12px;
+        transition:
+          border-color 0.2s,
+          transform 0.2s,
+          box-shadow 0.2s;
+      }
+
+      .glass-card:hover {
+        border-color: var(--border-glow);
+        transform: translateY(-2px);
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+      }
+
+      /* ── Gradient text ── */
+      .gradient-text {
+        background: linear-gradient(
+          135deg,
+          #e2e8f0 0%,
+          #38bdf8 50%,
+          #818cf8 100%
+        );
+        background-clip: text;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      /* ── Terminal window chrome ── */
+      .terminal-window {
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow:
+          0 25px 60px rgba(0, 0, 0, 0.5),
+          0 0 40px rgba(56, 189, 248, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .terminal-titlebar {
+        background: var(--terminal-bar);
+        padding: 10px 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .terminal-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+      }
+
+      .terminal-dot.red {
+        background: #ef4444;
+      }
+      .terminal-dot.yellow {
+        background: #eab308;
+      }
+      .terminal-dot.green {
+        background: #22c55e;
+      }
+
+      .terminal-title {
+        flex: 1;
+        text-align: center;
+        font-size: 12px;
+        color: var(--text-muted);
+        font-family: "JetBrains Mono", monospace;
+      }
+
+      .terminal-body {
+        background: var(--terminal-bg);
+        padding: 20px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 13px;
+        line-height: 1.8;
+      }
+
+      /* ── Hero section ── */
+      .hero {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        position: relative;
+        overflow: hidden;
+        padding: 60px 24px;
+      }
+
+      .hero-bg {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          135deg,
+          var(--bg-primary) 0%,
+          #0d1220 40%,
+          var(--bg-secondary) 100%
+        );
+      }
+
+      .hero-orb {
+        position: absolute;
+        border-radius: 50%;
+        pointer-events: none;
+        animation: orb-drift 20s ease-in-out infinite alternate;
+      }
+
+      .hero-orb--cyan {
+        top: -150px;
+        left: -150px;
+        width: 500px;
+        height: 500px;
+        background: radial-gradient(
+          circle,
+          rgba(56, 189, 248, 0.08) 0%,
+          transparent 70%
+        );
+      }
+
+      .hero-orb--violet {
+        bottom: -150px;
+        right: -150px;
+        width: 500px;
+        height: 500px;
+        background: radial-gradient(
+          circle,
+          rgba(129, 140, 248, 0.08) 0%,
+          transparent 70%
+        );
+      }
+
+      @keyframes orb-drift {
+        0% {
+          transform: translate(0, 0);
+        }
+        100% {
+          transform: translate(30px, -20px);
+        }
+      }
+
+      .hero-content {
+        position: relative;
+        z-index: 1;
+        max-width: 800px;
+      }
+
+      .hero-ascii {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 16px;
+        line-height: 1.2;
+        margin-bottom: 20px;
+        white-space: pre;
+        overflow: hidden;
+      }
+
+      .hero-badge {
+        display: inline-block;
+        padding: 4px 14px;
+        border-radius: 20px;
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        background: rgba(56, 189, 248, 0.08);
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+        color: var(--accent-cyan);
+        margin-bottom: 24px;
+      }
+
+      .hero-headline {
+        font-size: 48px;
+        font-weight: 800;
+        line-height: 1.1;
+        margin-bottom: 16px;
+        max-width: 700px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      .hero-sub {
+        font-size: 17px;
+        color: var(--text-secondary);
+        max-width: 560px;
+        margin: 0 auto 28px;
+        line-height: 1.6;
+      }
+
+      .hero-ctas {
+        display: flex;
+        gap: 12px;
+        justify-content: center;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+      }
+
+      .btn-primary {
+        display: inline-block;
+        padding: 10px 28px;
+        border-radius: 8px;
+        background: linear-gradient(
+          135deg,
+          var(--accent-cyan),
+          var(--accent-violet)
+        );
+        color: var(--bg-primary);
+        font-size: 14px;
+        font-weight: 600;
+        text-decoration: none;
+        transition:
+          opacity 0.2s,
+          transform 0.2s;
+      }
+
+      .btn-primary:hover {
+        opacity: 0.9;
+        transform: translateY(-1px);
+      }
+
+      .btn-secondary {
+        display: inline-block;
+        padding: 10px 28px;
+        border-radius: 8px;
+        border: 1px solid rgba(226, 232, 240, 0.15);
+        color: var(--text-primary);
+        font-size: 14px;
+        font-weight: 500;
+        text-decoration: none;
+        transition:
+          border-color 0.2s,
+          transform 0.2s;
+      }
+
+      .btn-secondary:hover {
+        border-color: rgba(226, 232, 240, 0.3);
+        transform: translateY(-1px);
+      }
+
+      .hero-install {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 18px;
+        border-radius: 8px;
+        background: rgba(30, 41, 59, 0.8);
+        border: 1px solid rgba(56, 189, 248, 0.15);
+        font-family: "JetBrains Mono", monospace;
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-bottom: 48px;
+        cursor: pointer;
+        transition: border-color 0.2s;
+      }
+
+      .hero-install:hover {
+        border-color: rgba(56, 189, 248, 0.4);
+      }
+
+      .hero-install .prompt {
+        color: var(--text-muted);
+      }
+
+      .hero-install .cmd {
+        color: var(--text-primary);
+      }
+
+      .hero-install .copy-divider {
+        width: 1px;
+        height: 16px;
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .hero-install .copy-text {
+        color: var(--accent-cyan);
+        font-size: 11px;
+      }
+
+      .hero-terminal {
+        max-width: 620px;
+        margin: 0 auto;
+      }
+
+      .hero::after {
+        content: "";
+        position: absolute;
+        bottom: 0;
+        left: 10%;
+        right: 10%;
+        height: 1px;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          rgba(56, 189, 248, 0.2),
+          transparent
+        );
+      }
+
+      /* ══════════════ THE PROBLEM ══════════════ */
+      .problem {
+        padding: 80px 24px;
+        text-align: center;
+      }
+
+      .problem-statement {
+        font-size: 28px;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin-bottom: 32px;
+      }
+
+      .pain-points {
+        display: flex;
+        gap: 32px;
+        justify-content: center;
+        margin-bottom: 32px;
+      }
+
+      .pain-point {
+        flex: 1;
+        max-width: 240px;
+      }
+
+      .pain-icon {
+        font-size: 24px;
+        color: var(--text-muted);
+        margin-bottom: 8px;
+      }
+
+      .pain-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 4px;
+      }
+
+      .pain-desc {
+        font-size: 14px;
+        color: var(--text-muted);
+        line-height: 1.5;
+      }
+
+      .problem-transition {
+        font-size: 15px;
+        color: var(--text-muted);
+      }
+
+      /* ══════════════ TERMINAL DEMO ══════════════ */
+      .demo {
+        padding: 80px 24px;
+        position: relative;
+      }
+
+      .demo::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+        background-size: 40px 40px;
+        pointer-events: none;
+      }
+
+      .demo .container {
+        position: relative;
+        z-index: 1;
+      }
+
+      .demo-tabs {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 16px;
+        justify-content: center;
+      }
+
+      .demo-tab {
+        padding: 8px 20px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 13px;
+        color: var(--text-muted);
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .demo-tab:hover {
+        color: var(--text-secondary);
+        background: rgba(255, 255, 255, 0.03);
+      }
+
+      .demo-tab.active {
+        color: var(--accent-cyan);
+        background: rgba(56, 189, 248, 0.08);
+        border-color: rgba(56, 189, 248, 0.2);
+      }
+
+      .demo-terminal {
+        max-width: 720px;
+        margin: 0 auto;
+      }
+
+      .demo-terminal .terminal-body {
+        min-height: 300px;
+      }
+
+      .term-line {
+        opacity: 0;
+        transform: translateY(2px);
+        transition:
+          opacity 0.15s,
+          transform 0.15s;
+      }
+
+      .term-line.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .t-prompt {
+        color: var(--text-muted);
+      }
+      .t-cmd {
+        color: var(--text-primary);
+      }
+      .t-output {
+        color: var(--text-secondary);
+      }
+      .t-success {
+        color: var(--accent-green);
+      }
+      .t-muted {
+        color: var(--text-muted);
+        opacity: 0.7;
+      }
+      .t-warn {
+        color: var(--accent-amber);
+      }
+      .t-active {
+        color: var(--accent-green);
+      }
+
+      /* ══════════════ FEATURES ══════════════ */
+      .features {
+        padding: 80px 24px;
+      }
+
+      .features-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+      }
+
+      .feature-card {
+        padding: 24px;
+      }
+
+      .feature-icon {
+        font-size: 32px;
+        color: var(--accent-cyan);
+        margin-bottom: 12px;
+        font-family: "JetBrains Mono", monospace;
+      }
+
+      .feature-name {
+        font-size: 18px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 4px;
+      }
+
+      .feature-cmd {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 13px;
+        color: var(--accent-cyan);
+        margin-bottom: 10px;
+      }
+
+      .feature-desc {
+        font-size: 15px;
+        color: var(--text-secondary);
+        line-height: 1.5;
+      }
+
+      /* ══════════════ HOW IT WORKS ══════════════ */
+      .how-it-works {
+        padding: 80px 24px;
+        text-align: center;
+      }
+
+      .steps {
+        display: flex;
+        gap: 40px;
+        justify-content: center;
+        align-items: flex-start;
+        position: relative;
+        max-width: 800px;
+        margin: 0 auto;
+      }
+
+      .steps::before {
+        content: "";
+        position: absolute;
+        top: 18px;
+        left: 20%;
+        right: 20%;
+        height: 1px;
+        border-top: 2px dashed rgba(56, 189, 248, 0.2);
+      }
+
+      .step {
+        flex: 1;
+        position: relative;
+        z-index: 1;
+      }
+
+      .step-number {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        background-image:
+          linear-gradient(var(--bg-primary), var(--bg-primary)),
+          linear-gradient(135deg, var(--accent-cyan), var(--accent-violet));
+        background-origin: border-box;
+        background-clip: padding-box, border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 14px;
+        color: var(--accent-cyan);
+        margin: 0 auto 12px;
+      }
+
+      .step-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 6px;
+      }
+
+      .step-cmd {
+        display: inline-block;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+        color: var(--accent-cyan);
+        background: rgba(56, 189, 248, 0.08);
+        padding: 2px 8px;
+        border-radius: 4px;
+        margin-bottom: 8px;
+      }
+
+      .step-desc {
+        font-size: 14px;
+        color: var(--text-secondary);
+        line-height: 1.5;
+      }
+
+      /* ══════════════ INSTALL ══════════════ */
+      .install {
+        padding: 80px 24px;
+        text-align: center;
+      }
+
+      .install-box {
+        max-width: 680px;
+        margin: 0 auto 12px;
+        padding: 18px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        cursor: pointer;
+      }
+
+      .install-text {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 13px;
+        color: var(--text-primary);
+        text-align: left;
+        word-break: break-all;
+      }
+
+      .install-text .prompt {
+        color: var(--text-muted);
+      }
+
+      .copy-btn {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+        color: var(--accent-cyan);
+        background: rgba(56, 189, 248, 0.08);
+        border: 1px solid rgba(56, 189, 248, 0.2);
+        padding: 4px 14px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s;
+        white-space: nowrap;
+      }
+
+      .copy-btn:hover {
+        background: rgba(56, 189, 248, 0.15);
+      }
+
+      .install-note {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-bottom: 6px;
+      }
+
+      .install-alt {
+        font-size: 12px;
+        color: var(--text-muted);
+        opacity: 0.7;
+      }
+
+      .install-alt code {
+        font-family: "JetBrains Mono", monospace;
+        color: var(--text-secondary);
+      }
+
+      /* ══════════════ SOCIAL PROOF ══════════════ */
+      .social-proof {
+        padding: 32px 24px;
+        text-align: center;
+        border-top: 1px solid rgba(255, 255, 255, 0.04);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      }
+
+      .proof-items {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 24px;
+        flex-wrap: wrap;
+        font-size: 12px;
+        color: var(--text-muted);
+        font-family: "JetBrains Mono", monospace;
+      }
+
+      .proof-divider {
+        color: rgba(255, 255, 255, 0.1);
+      }
+
+      /* ══════════════ FOOTER ══════════════ */
+      .footer {
+        padding: 40px 24px;
+        text-align: center;
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .footer a {
+        color: var(--text-secondary);
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+
+      .footer a:hover {
+        color: var(--accent-cyan);
+      }
+
+      /* ══════════════ COMMAND REFERENCE ══════════════ */
+      .commands {
+        padding: 80px 24px;
+      }
+
+      .cmd-group {
+        margin-bottom: 8px;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .cmd-group-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 20px;
+        cursor: pointer;
+        transition: background 0.2s;
+        background: var(--bg-card);
+        border: 1px solid var(--border-card);
+        border-radius: 8px;
+      }
+
+      .cmd-group.open .cmd-group-header {
+        border-radius: 8px 8px 0 0;
+        border-bottom-color: transparent;
+      }
+
+      .cmd-group-header:hover {
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      .cmd-group-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      .cmd-group-meta {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .cmd-count {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        color: var(--text-muted);
+        background: rgba(255, 255, 255, 0.05);
+        padding: 2px 8px;
+        border-radius: 4px;
+      }
+
+      .cmd-chevron {
+        color: var(--text-muted);
+        transition: transform 0.3s;
+        font-size: 12px;
+      }
+
+      .cmd-group.open .cmd-chevron {
+        transform: rotate(180deg);
+      }
+
+      .cmd-group-body {
+        max-height: 0;
+        overflow: hidden;
+        transition: max-height 0.3s ease;
+        border: 1px solid var(--border-card);
+        border-top: none;
+        border-radius: 0 0 8px 8px;
+      }
+
+      .cmd-group.open .cmd-group-body {
+        max-height: 600px;
+      }
+
+      .cmd-table {
+        width: 100%;
+        padding: 12px 20px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+      }
+
+      .cmd-table tr {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      }
+
+      .cmd-table tr:last-child {
+        border-bottom: none;
+      }
+
+      .cmd-table td {
+        padding: 6px 0;
+        vertical-align: top;
+      }
+
+      .cmd-table td:first-child {
+        color: var(--text-primary);
+        white-space: nowrap;
+        padding-right: 24px;
+        width: 280px;
+      }
+
+      .cmd-table td:last-child {
+        color: var(--text-muted);
+      }
+
+      /* ══════════════ SCROLL REVEAL ══════════════ */
+      .reveal {
+        opacity: 0;
+        transform: translateY(20px);
+        transition:
+          opacity 0.6s ease,
+          transform 0.6s ease;
+      }
+
+      .reveal.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      /* ══════════════ ACCESSIBILITY ══════════════ */
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+        .reveal {
+          opacity: 1;
+          transform: none;
+        }
+        .term-line {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      /* ══════════════ RESPONSIVE ══════════════ */
+      @media (max-width: 768px) {
+        .hero {
+          padding: 40px 20px;
+          min-height: auto;
+        }
+        .hero-ascii {
+          font-size: 10px;
+        }
+        .hero-headline {
+          font-size: 32px;
+        }
+        .hero-install {
+          font-size: 11px;
+          flex-wrap: wrap;
+          justify-content: center;
+        }
+        .pain-points {
+          flex-direction: column;
+          align-items: center;
+        }
+        .features-grid {
+          grid-template-columns: 1fr 1fr;
+        }
+        @media (max-width: 560px) {
+          .features-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+        .steps {
+          flex-direction: column;
+          gap: 32px;
+          align-items: flex-start;
+          padding-left: 56px;
+        }
+        .steps::before {
+          left: 18px;
+          right: auto;
+          top: 36px;
+          bottom: 36px;
+          width: 0;
+          height: auto;
+          border-top: none;
+          border-left: 2px dashed rgba(56, 189, 248, 0.2);
+        }
+        .step {
+          text-align: left;
+        }
+        .step-number {
+          position: absolute;
+          left: -56px;
+          top: 0;
+        }
+        .demo-tabs {
+          flex-wrap: wrap;
+          justify-content: center;
+        }
+        .demo-terminal .terminal-body {
+          font-size: 11px;
+          overflow-x: auto;
+        }
+        .install-box {
+          flex-direction: column;
+          align-items: stretch;
+          text-align: center;
+        }
+        .cmd-table td:first-child {
+          width: auto;
+          white-space: normal;
+        }
+      }
+
+      @media (max-width: 480px) {
+        .hero-headline {
+          font-size: 26px;
+        }
+        .hero-sub {
+          font-size: 15px;
+        }
+        .hero-install .cmd {
+          font-size: 10px;
+          word-break: break-all;
+        }
+        .problem-statement {
+          font-size: 22px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <section class="hero" id="hero">
+      <div class="hero-bg">
+        <div class="hero-orb hero-orb--cyan"></div>
+        <div class="hero-orb hero-orb--violet"></div>
+      </div>
+      <div class="hero-content">
+        <pre class="hero-ascii gradient-text" aria-hidden="true">
+ ██████╗ ██████╗███╗   ███╗
 ██╔════╝██╔════╝████╗ ████║
 ██║     ██║     ██╔████╔██║
 ██║     ██║     ██║╚██╔╝██║
 ╚██████╗╚██████╗██║ ╚═╝ ██║
- ╚═════╝ ╚═════╝╚═╝     ╚═╝</pre>
-      <div class="hero-badge">v4.0.0 · Open Source · MIT License</div>
-      <h1 class="hero-headline gradient-text">The power-user toolkit for Claude Code</h1>
-      <p class="hero-sub">Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival — plus multi-account management, project bindings, and disk cleanup. No Node, no Python — just bash.</p>
-      <div class="hero-ctas">
-        <a href="#install" class="btn-primary">Get Started</a>
-        <a href="https://github.com/dr5hn/ccm" target="_blank" rel="noopener" class="btn-secondary">View on GitHub</a>
-      </div>
-      <div class="hero-install" onclick="copyInstall()">
-        <span class="prompt">$</span>
-        <span class="cmd">curl -fsSL https://raw.githubusercontent.com/dr5hn/ccm/main/install.sh | bash</span>
-        <span class="copy-divider"></span>
-        <span class="copy-text" id="heroCopyBtn">COPY</span>
-      </div>
-      <div class="hero-terminal terminal-window">
-        <div class="terminal-titlebar">
-          <div class="terminal-dot red"></div>
-          <div class="terminal-dot yellow"></div>
-          <div class="terminal-dot green"></div>
-          <span class="terminal-title">ccm — zsh</span>
+ ╚═════╝ ╚═════╝╚═╝     ╚═╝</pre
+        >
+        <div class="hero-badge">v4.0.0 · Open Source · MIT License</div>
+        <h1 class="hero-headline gradient-text">
+          The power-user toolkit for Claude Code
+        </h1>
+        <p class="hero-sub">
+          Concurrent sessions, rate limit auto-switch, per-account dashboards,
+          session archival — plus multi-account management, project bindings,
+          and disk cleanup. No Node, no Python — just bash.
+        </p>
+        <div class="hero-ctas">
+          <a href="#install" class="btn-primary">Get Started</a>
+          <a
+            href="https://github.com/dr5hn/ccm"
+            target="_blank"
+            rel="noopener"
+            class="btn-secondary"
+            >View on GitHub</a
+          >
         </div>
-        <div class="terminal-body">
-          <div><span style="color:var(--text-muted)">$ </span><span style="color:var(--text-primary)">ccm list</span></div>
-          <div style="margin-top:8px;color:var(--text-secondary)">Managed Accounts:</div>
-          <div style="margin-top:4px"><span style="color:var(--accent-green)">  1  ★  darshan@personal.dev</span><span style="color:var(--text-muted)">    [personal]    healthy</span></div>
-          <div><span style="color:var(--text-primary)">  2     darshan@company.com</span><span style="color:var(--text-muted)">     [work]        healthy</span></div>
-          <div><span style="color:var(--text-primary)">  3     client@agency.io</span><span style="color:var(--text-muted)">        [client]      healthy</span></div>
-          <div style="margin-top:12px"><span style="color:var(--text-muted)">$ </span><span style="color:var(--text-primary)">ccm switch work</span></div>
-          <div style="color:var(--accent-green);margin-top:4px">✓ Switched: personal → work</div>
+        <div class="hero-install" onclick="copyInstall()">
+          <span class="prompt">$</span>
+          <span class="cmd"
+            >curl -fsSL
+            https://raw.githubusercontent.com/dr5hn/ccm/main/install.sh |
+            bash</span
+          >
+          <span class="copy-divider"></span>
+          <span class="copy-text" id="heroCopyBtn">COPY</span>
         </div>
-      </div>
-    </div>
-  </section>
-  <section class="problem" id="problem">
-    <div class="container reveal">
-      <div class="section-label">The Problem</div>
-      <h2 class="problem-statement">Claude Code wasn't built for power users.</h2>
-      <div class="pain-points">
-        <div class="pain-point">
-          <div class="pain-icon">⚙</div>
-          <div class="pain-title">No multi-account support</div>
-          <div class="pain-desc">10+ open issues requesting account switching — still not shipped. CCM does it with project bindings.</div>
-        </div>
-        <div class="pain-point">
-          <div class="pain-icon">◎</div>
-          <div class="pain-title">Unbounded disk growth</div>
-          <div class="pain-desc">~/.claude can grow to 500GB+ from a single session. CCM cleans 9 targets with one command.</div>
-        </div>
-        <div class="pain-point">
-          <div class="pain-icon">◻</div>
-          <div class="pain-title">Invisible config rot</div>
-          <div class="pain-desc">Dead permission rules, stale locks, orphaned processes — ccm doctor finds them, ccm --fix resolves them.</div>
-        </div>
-      </div>
-      <p class="problem-transition">CCM fixes all of this — one bash script, zero dependencies beyond bash + jq.</p>
-    </div>
-  </section>
-  <section class="demo" id="demo">
-  <div class="container reveal">
-    <div class="section-label" style="text-align:center">See It In Action</div>
-    <div class="demo-tabs">
-      <button class="demo-tab active" data-demo="accounts">accounts</button>
-      <button class="demo-tab" data-demo="bindings">bindings</button>
-      <button class="demo-tab" data-demo="sessions">sessions</button>
-      <button class="demo-tab" data-demo="tokens">token usage</button>
-      <button class="demo-tab" data-demo="watch">rate watcher</button>
-      <button class="demo-tab" data-demo="doctor">doctor</button>
-      <button class="demo-tab" data-demo="permissions">permissions</button>
-    </div>
-    <div class="demo-terminal terminal-window">
-      <div class="terminal-titlebar">
-        <div class="terminal-dot red"></div>
-        <div class="terminal-dot yellow"></div>
-        <div class="terminal-dot green"></div>
-        <span class="terminal-title">ccm — zsh</span>
-      </div>
-      <div class="terminal-body" id="terminal"></div>
-    </div>
-  </div>
-</section>
-  <section class="features" id="features">
-  <div class="container reveal">
-    <div class="section-label">What's Inside</div>
-    <div class="features-grid">
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⟩_</div>
-        <div class="feature-name">Account Switching</div>
-        <div class="feature-cmd">ccm switch &lt;id&gt;</div>
-        <div class="feature-desc">Rotate between accounts in one command. Aliases, history, undo, reorder, import/export.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊞</div>
-        <div class="feature-name">Project Bindings</div>
-        <div class="feature-cmd">ccm bind . work</div>
-        <div class="feature-desc">Bind project directories to accounts. Auto-switch on cd with <code>eval "$(ccm hook)"</code> in your shell rc — zero overhead, parent directory matching.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊡</div>
-        <div class="feature-name">Session Management</div>
-        <div class="feature-cmd">ccm session search</div>
-        <div class="feature-desc">List, inspect, relocate, search, and clean sessions. Full-text search across all conversation history.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊟</div>
-        <div class="feature-name">Usage Analytics</div>
-        <div class="feature-cmd">ccm usage history</div>
-        <div class="feature-desc">Token usage breakdown by project and day. Disk usage, session counts, project ranking.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊕</div>
-        <div class="feature-name">Health &amp; Maintenance</div>
-        <div class="feature-cmd">ccm doctor</div>
-        <div class="feature-desc">13 health checks: disk size, tmp bloat, orphaned processes, stale locks, hook config. Auto-fix with --fix. Clean tmp files, kill leaked processes.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊘</div>
-        <div class="feature-name">Concurrent Sessions</div>
-        <div class="feature-cmd">ccm switch --isolated work</div>
-        <div class="feature-desc">True parallel sessions via CLAUDE_CONFIG_DIR. Run multiple accounts simultaneously without conflicts.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊗</div>
-        <div class="feature-name">Rate Limit Watcher</div>
-        <div class="feature-cmd">ccm watch --threshold 85 --auto</div>
-        <div class="feature-desc">Monitor rate limits in real time. Auto-switch to the next available account when usage hits your threshold.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊞</div>
-        <div class="feature-name">Per-Account Dashboard</div>
-        <div class="feature-cmd">ccm usage dashboard</div>
-        <div class="feature-desc">Token usage attributed per account. See which account is burning tokens and where, with per-project drill-down.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊟</div>
-        <div class="feature-name">Session Archive</div>
-        <div class="feature-cmd">ccm session archive</div>
-        <div class="feature-desc">Compress old sessions instead of deleting them. Reclaim disk space while keeping conversation history searchable.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊛</div>
-        <div class="feature-name">Setup Wizard</div>
-        <div class="feature-cmd">ccm setup</div>
-        <div class="feature-desc">Interactive first-run onboarding. Add accounts, configure bindings, install statusline, and set shell hook — all guided.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊙</div>
-        <div class="feature-name">Project Init</div>
-        <div class="feature-cmd">ccm init</div>
-        <div class="feature-desc">Auto-generate .claudeignore by project type. Saves 40-60% tokens by excluding node_modules, build dirs, and more.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊛</div>
-        <div class="feature-name">Permissions Audit</div>
-        <div class="feature-cmd">ccm permissions audit</div>
-        <div class="feature-desc">Find duplicate, contradictory, and dead "Always Allow" rules bloating your settings.json. Auto-fix with --fix.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊜</div>
-        <div class="feature-name">Statusline</div>
-        <div class="feature-cmd">ccm statusline</div>
-        <div class="feature-desc">Live status bar: session cost, context %, tokens, burn rate, rate limits, branch. Shareable standalone install.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊝</div>
-        <div class="feature-name">Environment Snapshots</div>
-        <div class="feature-cmd">ccm env snapshot</div>
-        <div class="feature-desc">Save and restore your Claude Code config. Audit MCP servers for token waste.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊞</div>
-        <div class="feature-name">Shell Auto-Switch</div>
-        <div class="feature-cmd">eval "$(ccm hook --isolated)"</div>
-        <div class="feature-desc">Auto-switch accounts on cd into a bound directory. <code>--isolated</code> sets CLAUDE_CONFIG_DIR per-shell so concurrent terminals stay on their own accounts — no fighting over global credentials.</div>
-      </div>
-      <div class="feature-card glass-card">
-        <div class="feature-icon">⊠</div>
-        <div class="feature-name">Security Hardened</div>
-        <div class="feature-cmd">No eval · umask 077</div>
-        <div class="feature-desc">No eval with external data, atomic writes with restrictive umask, input validation at every boundary, path traversal protection.</div>
-      </div>
-    </div>
-  </div>
-</section>
-  <section class="how-it-works" id="how-it-works">
-  <div class="container reveal">
-    <div class="section-label">Get Started In 30 Seconds</div>
-    <div class="steps">
-      <div class="step">
-        <div class="step-number">1</div>
-        <div class="step-title">Install</div>
-        <code class="step-cmd">curl -fsSL .../install.sh | bash</code>
-        <div class="step-desc">One command, no sudo required. Works on macOS, Linux, WSL.</div>
-      </div>
-      <div class="step">
-        <div class="step-number">2</div>
-        <div class="step-title">Add your accounts</div>
-        <code class="step-cmd">ccm add</code>
-        <div class="step-desc">Run once per account. CCM detects your active Claude Code credentials.</div>
-      </div>
-      <div class="step">
-        <div class="step-number">3</div>
-        <div class="step-title">Switch anytime</div>
-        <code class="step-cmd">ccm switch work</code>
-        <div class="step-desc">Swap accounts instantly. Your sessions and config stay intact.</div>
-      </div>
-    </div>
-  </div>
-</section>
-  <section class="install" id="install">
-  <div class="container reveal">
-    <div class="section-label">Install</div>
-    <div class="install-box glass-card" onclick="copyInstallMain()">
-      <div class="install-text">
-        <span class="prompt">$ </span>curl -fsSL https://raw.githubusercontent.com/dr5hn/ccm/main/install.sh | bash
-      </div>
-      <button class="copy-btn" id="mainCopyBtn">COPY</button>
-    </div>
-    <div class="install-note">Requires: bash 4.4+, jq · Works on macOS, Linux, WSL</div>
-    <div class="install-alt" style="margin-bottom: 4px;">Homebrew: <code>brew tap dr5hn/tap &amp;&amp; brew install ccm</code></div>
-    <div class="install-alt" style="margin-bottom: 4px;">npm: <code>npm install -g @dr5hn/ccm</code></div>
-    <div class="install-alt" style="margin-bottom: 4px;">Skill: <code>npx skills add dr5hn/ccm@ccm</code></div>
-    <div class="install-alt">Or clone manually: <code>git clone https://github.com/dr5hn/ccm.git &amp;&amp; cd ccm &amp;&amp; ./install.sh</code></div>
-  </div>
-</section>
-  <section class="social-proof" id="social-proof">
-  <div class="proof-items">
-    <a href="https://github.com/dr5hn/ccm" target="_blank" rel="noopener"><img src="https://img.shields.io/github/stars/dr5hn/ccm?style=flat&amp;color=38bdf8&amp;labelColor=0d1117" alt="GitHub stars" height="20"></a>
-    <span class="proof-divider">·</span>
-    <span>MIT Licensed</span>
-    <span class="proof-divider">·</span>
-    <span>bash 4.4+</span>
-    <span class="proof-divider">·</span>
-    <span>Zero dependencies beyond jq</span>
-  </div>
-</section>
-  <section class="commands" id="commands">
-  <div class="container reveal">
-    <div class="section-label">Command Reference</div>
-
-    <div class="cmd-group open" data-accordion>
-      <div class="cmd-group-header" onclick="toggleAccordion(this)">
-        <span class="cmd-group-title">Account Management</span>
-        <div class="cmd-group-meta">
-          <span class="cmd-count">16 commands</span>
-          <span class="cmd-chevron">▼</span>
+        <div class="hero-terminal terminal-window">
+          <div class="terminal-titlebar">
+            <div class="terminal-dot red"></div>
+            <div class="terminal-dot yellow"></div>
+            <div class="terminal-dot green"></div>
+            <span class="terminal-title">ccm — zsh</span>
+          </div>
+          <div class="terminal-body">
+            <div>
+              <span style="color: var(--text-muted)">$ </span
+              ><span style="color: var(--text-primary)">ccm list</span>
+            </div>
+            <div style="margin-top: 8px; color: var(--text-secondary)">
+              Managed Accounts:
+            </div>
+            <div style="margin-top: 4px">
+              <span style="color: var(--accent-green)">
+                1 ★ darshan@personal.dev</span
+              ><span style="color: var(--text-muted)"> [personal] healthy</span>
+            </div>
+            <div>
+              <span style="color: var(--text-primary)">
+                2 darshan@company.com</span
+              ><span style="color: var(--text-muted)"> [work] healthy</span>
+            </div>
+            <div>
+              <span style="color: var(--text-primary)">
+                3 vertex:some-project-id</span
+              ><span style="color: var(--text-muted)"> [gcp] healthy</span>
+            </div>
+            <div style="margin-top: 12px">
+              <span style="color: var(--text-muted)">$ </span
+              ><span style="color: var(--text-primary)">ccm switch work</span>
+            </div>
+            <div style="color: var(--accent-green); margin-top: 4px">
+              ✓ Switched: personal → work
+            </div>
+          </div>
         </div>
       </div>
-      <div class="cmd-group-body">
-        <table class="cmd-table">
-          <tr><td>ccm add</td><td>Add current account</td></tr>
-          <tr><td>ccm remove &lt;id&gt;</td><td>Remove account by number, email, or alias</td></tr>
-          <tr><td>ccm switch [id]</td><td>Switch account (next, specific, or project-bound)</td></tr>
-          <tr><td>ccm undo</td><td>Revert last switch</td></tr>
-          <tr><td>ccm list</td><td>List managed accounts</td></tr>
-          <tr><td>ccm alias &lt;id&gt; &lt;name&gt;</td><td>Set account alias</td></tr>
-          <tr><td>ccm reorder &lt;from&gt; &lt;to&gt;</td><td>Reorder account positions</td></tr>
-          <tr><td>ccm bind [path] &lt;account&gt;</td><td>Bind project directory to an account</td></tr>
-          <tr><td>ccm unbind [path]</td><td>Remove project binding</td></tr>
-          <tr><td>ccm bind list</td><td>Show all project bindings</td></tr>
-          <tr><td>ccm hook</td><td>Shell hook for auto-switch on cd (global mode)</td></tr>
-          <tr><td>ccm hook --isolated</td><td>Hook that sets CLAUDE_CONFIG_DIR per-shell — safe for concurrent terminals</td></tr>
-          <tr><td>ccm verify [id]</td><td>Verify backup integrity</td></tr>
-          <tr><td>ccm history</td><td>Show switch history</td></tr>
-          <tr><td>ccm export &lt;path&gt;</td><td>Export accounts to archive</td></tr>
-          <tr><td>ccm import &lt;path&gt;</td><td>Import from archive</td></tr>
-          <tr><td>ccm switch --isolated &lt;id&gt;</td><td>Switch with isolated CLAUDE_CONFIG_DIR</td></tr>
-        </table>
+    </section>
+    <section class="problem" id="problem">
+      <div class="container reveal">
+        <div class="section-label">The Problem</div>
+        <h2 class="problem-statement">
+          Claude Code wasn't built for power users.
+        </h2>
+        <div class="pain-points">
+          <div class="pain-point">
+            <div class="pain-icon">⚙</div>
+            <div class="pain-title">No multi-account support</div>
+            <div class="pain-desc">
+              10+ open issues requesting account switching — still not shipped.
+              CCM does it with project bindings.
+            </div>
+          </div>
+          <div class="pain-point">
+            <div class="pain-icon">◎</div>
+            <div class="pain-title">Unbounded disk growth</div>
+            <div class="pain-desc">
+              ~/.claude can grow to 500GB+ from a single session. CCM cleans 9
+              targets with one command.
+            </div>
+          </div>
+          <div class="pain-point">
+            <div class="pain-icon">◻</div>
+            <div class="pain-title">Invisible config rot</div>
+            <div class="pain-desc">
+              Dead permission rules, stale locks, orphaned processes — ccm
+              doctor finds them, ccm --fix resolves them.
+            </div>
+          </div>
+        </div>
+        <p class="problem-transition">
+          CCM fixes all of this — one bash script, zero dependencies beyond bash
+          + jq.
+        </p>
       </div>
-    </div>
-
-    <div class="cmd-group" data-accordion>
-      <div class="cmd-group-header" onclick="toggleAccordion(this)">
-        <span class="cmd-group-title">Session Management</span>
-        <div class="cmd-group-meta">
-          <span class="cmd-count">6 commands</span>
-          <span class="cmd-chevron">▼</span>
+    </section>
+    <section class="demo" id="demo">
+      <div class="container reveal">
+        <div class="section-label" style="text-align: center">
+          See It In Action
+        </div>
+        <div class="demo-tabs">
+          <button class="demo-tab active" data-demo="accounts">accounts</button>
+          <button class="demo-tab" data-demo="bindings">bindings</button>
+          <button class="demo-tab" data-demo="sessions">sessions</button>
+          <button class="demo-tab" data-demo="tokens">token usage</button>
+          <button class="demo-tab" data-demo="watch">rate watcher</button>
+          <button class="demo-tab" data-demo="doctor">doctor</button>
+          <button class="demo-tab" data-demo="permissions">permissions</button>
+        </div>
+        <div class="demo-terminal terminal-window">
+          <div class="terminal-titlebar">
+            <div class="terminal-dot red"></div>
+            <div class="terminal-dot yellow"></div>
+            <div class="terminal-dot green"></div>
+            <span class="terminal-title">ccm — zsh</span>
+          </div>
+          <div class="terminal-body" id="terminal"></div>
         </div>
       </div>
-      <div class="cmd-group-body">
-        <table class="cmd-table">
-          <tr><td>ccm session list</td><td>List all project sessions</td></tr>
-          <tr><td>ccm session info &lt;path&gt;</td><td>Session details for a project</td></tr>
-          <tr><td>ccm session search &lt;query&gt; [--limit N]</td><td>Full-text search across all sessions</td></tr>
-          <tr><td>ccm session relocate &lt;old&gt; &lt;new&gt;</td><td>Move sessions after project relocation</td></tr>
-          <tr><td>ccm session clean [--dry-run]</td><td>Remove orphaned sessions</td></tr>
-          <tr><td>ccm session archive [--days N]</td><td>Compress old sessions to save disk</td></tr>
-        </table>
-      </div>
-    </div>
-
-    <div class="cmd-group" data-accordion>
-      <div class="cmd-group-header" onclick="toggleAccordion(this)">
-        <span class="cmd-group-title">Environment</span>
-        <div class="cmd-group-meta">
-          <span class="cmd-count">5 commands</span>
-          <span class="cmd-chevron">▼</span>
+    </section>
+    <section class="features" id="features">
+      <div class="container reveal">
+        <div class="section-label">What's Inside</div>
+        <div class="features-grid">
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⟩_</div>
+            <div class="feature-name">Account Switching</div>
+            <div class="feature-cmd">ccm switch &lt;id&gt;</div>
+            <div class="feature-desc">
+              Rotate between OAuth and VertexAI accounts in one command.
+              Aliases, history, undo, reorder, import/export.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊞</div>
+            <div class="feature-name">Project Bindings</div>
+            <div class="feature-cmd">ccm bind . work</div>
+            <div class="feature-desc">
+              Bind project directories to accounts. Auto-switch on cd with
+              <code>eval "$(ccm hook)"</code> in your shell rc — zero overhead,
+              parent directory matching.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊡</div>
+            <div class="feature-name">Session Management</div>
+            <div class="feature-cmd">ccm session search</div>
+            <div class="feature-desc">
+              List, inspect, relocate, search, and clean sessions. Full-text
+              search across all conversation history.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊟</div>
+            <div class="feature-name">Usage Analytics</div>
+            <div class="feature-cmd">ccm usage history</div>
+            <div class="feature-desc">
+              Token usage breakdown by project and day. Disk usage, session
+              counts, project ranking.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊕</div>
+            <div class="feature-name">Health &amp; Maintenance</div>
+            <div class="feature-cmd">ccm doctor</div>
+            <div class="feature-desc">
+              13 health checks: disk size, tmp bloat, orphaned processes, stale
+              locks, hook config. Auto-fix with --fix. Clean tmp files, kill
+              leaked processes.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊘</div>
+            <div class="feature-name">Concurrent Sessions</div>
+            <div class="feature-cmd">ccm switch --isolated work</div>
+            <div class="feature-desc">
+              True parallel sessions via CLAUDE_CONFIG_DIR. Run multiple
+              accounts simultaneously without conflicts.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊗</div>
+            <div class="feature-name">Rate Limit Watcher</div>
+            <div class="feature-cmd">ccm watch --threshold 85 --auto</div>
+            <div class="feature-desc">
+              Monitor rate limits in real time. Auto-switch to the next
+              available account when usage hits your threshold.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊞</div>
+            <div class="feature-name">Per-Account Dashboard</div>
+            <div class="feature-cmd">ccm usage dashboard</div>
+            <div class="feature-desc">
+              Token usage attributed per account. See which account is burning
+              tokens and where, with per-project drill-down.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊟</div>
+            <div class="feature-name">Session Archive</div>
+            <div class="feature-cmd">ccm session archive</div>
+            <div class="feature-desc">
+              Compress old sessions instead of deleting them. Reclaim disk space
+              while keeping conversation history searchable.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊛</div>
+            <div class="feature-name">Setup Wizard</div>
+            <div class="feature-cmd">ccm setup</div>
+            <div class="feature-desc">
+              Interactive first-run onboarding. Add accounts, configure
+              bindings, install statusline, and set shell hook — all guided.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊙</div>
+            <div class="feature-name">Project Init</div>
+            <div class="feature-cmd">ccm init</div>
+            <div class="feature-desc">
+              Auto-generate .claudeignore by project type. Saves 40-60% tokens
+              by excluding node_modules, build dirs, and more.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊛</div>
+            <div class="feature-name">Permissions Audit</div>
+            <div class="feature-cmd">ccm permissions audit</div>
+            <div class="feature-desc">
+              Find duplicate, contradictory, and dead "Always Allow" rules
+              bloating your settings.json. Auto-fix with --fix.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊜</div>
+            <div class="feature-name">Statusline</div>
+            <div class="feature-cmd">ccm statusline</div>
+            <div class="feature-desc">
+              Live status bar: session cost, context %, tokens, burn rate, rate
+              limits, branch. Shareable standalone install.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊝</div>
+            <div class="feature-name">Environment Snapshots</div>
+            <div class="feature-cmd">ccm env snapshot</div>
+            <div class="feature-desc">
+              Save and restore your Claude Code config. Audit MCP servers for
+              token waste.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊞</div>
+            <div class="feature-name">Shell Auto-Switch</div>
+            <div class="feature-cmd">eval "$(ccm hook --isolated)"</div>
+            <div class="feature-desc">
+              Auto-switch accounts on cd into a bound directory.
+              <code>--isolated</code> sets CLAUDE_CONFIG_DIR per-shell so
+              concurrent terminals stay on their own accounts — no fighting over
+              global credentials.
+            </div>
+          </div>
+          <div class="feature-card glass-card">
+            <div class="feature-icon">⊠</div>
+            <div class="feature-name">Security Hardened</div>
+            <div class="feature-cmd">No eval · umask 077</div>
+            <div class="feature-desc">
+              No eval with external data, atomic writes with restrictive umask,
+              input validation at every boundary, path traversal protection.
+            </div>
+          </div>
         </div>
       </div>
-      <div class="cmd-group-body">
-        <table class="cmd-table">
-          <tr><td>ccm env snapshot [name]</td><td>Save current environment</td></tr>
-          <tr><td>ccm env restore &lt;name&gt; [--force]</td><td>Restore from snapshot</td></tr>
-          <tr><td>ccm env list</td><td>List snapshots</td></tr>
-          <tr><td>ccm env delete &lt;name&gt;</td><td>Remove a snapshot</td></tr>
-          <tr><td>ccm env audit</td><td>Audit MCP token efficiency</td></tr>
-        </table>
-      </div>
-    </div>
-
-    <div class="cmd-group" data-accordion>
-      <div class="cmd-group-header" onclick="toggleAccordion(this)">
-        <span class="cmd-group-title">Health &amp; Maintenance</span>
-        <div class="cmd-group-meta">
-          <span class="cmd-count">10 commands</span>
-          <span class="cmd-chevron">▼</span>
+    </section>
+    <section class="how-it-works" id="how-it-works">
+      <div class="container reveal">
+        <div class="section-label">Get Started In 30 Seconds</div>
+        <div class="steps">
+          <div class="step">
+            <div class="step-number">1</div>
+            <div class="step-title">Install</div>
+            <code class="step-cmd">curl -fsSL .../install.sh | bash</code>
+            <div class="step-desc">
+              One command, no sudo required. Works on macOS, Linux, WSL.
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-number">2</div>
+            <div class="step-title">Add your accounts</div>
+            <code class="step-cmd">ccm add</code>
+            <div class="step-desc">
+              Run once per account. CCM detects your active Claude Code
+              credentials.
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-number">3</div>
+            <div class="step-title">Switch anytime</div>
+            <code class="step-cmd">ccm switch work</code>
+            <div class="step-desc">
+              Swap accounts instantly. Your sessions and config stay intact.
+            </div>
+          </div>
         </div>
       </div>
-      <div class="cmd-group-body">
-        <table class="cmd-table">
-          <tr><td>ccm doctor</td><td>13 health checks (disk, tmp, processes, hooks, locks, cache)</td></tr>
-          <tr><td>ccm doctor --fix</td><td>Auto-fix safe issues</td></tr>
-          <tr><td>ccm clean debug [--days N]</td><td>Clean debug logs (default: 30 days)</td></tr>
-          <tr><td>ccm clean telemetry</td><td>Remove telemetry data</td></tr>
-          <tr><td>ccm clean todos [--days N]</td><td>Remove old todo files</td></tr>
-          <tr><td>ccm clean history [--keep N]</td><td>Trim history (default: keep 1000)</td></tr>
-          <tr><td>ccm clean tmp [--days N]</td><td>Clean orphaned tmp output files (default: 1 day)</td></tr>
-          <tr><td>ccm clean processes</td><td>Kill orphaned Claude subagent processes</td></tr>
-          <tr><td>ccm clean cache</td><td>Clean plugin cache</td></tr>
-          <tr><td>ccm clean all [--dry-run]</td><td>Clean everything safe</td></tr>
-        </table>
-      </div>
-    </div>
-
-    <div class="cmd-group" data-accordion>
-      <div class="cmd-group-header" onclick="toggleAccordion(this)">
-        <span class="cmd-group-title">Rate Limit Watcher</span>
-        <div class="cmd-group-meta">
-          <span class="cmd-count">3 commands</span>
-          <span class="cmd-chevron">▼</span>
+    </section>
+    <section class="install" id="install">
+      <div class="container reveal">
+        <div class="section-label">Install</div>
+        <div class="install-box glass-card" onclick="copyInstallMain()">
+          <div class="install-text">
+            <span class="prompt">$ </span>curl -fsSL
+            https://raw.githubusercontent.com/dr5hn/ccm/main/install.sh | bash
+          </div>
+          <button class="copy-btn" id="mainCopyBtn">COPY</button>
+        </div>
+        <div class="install-note">
+          Requires: bash 4.4+, jq · Works on macOS, Linux, WSL
+        </div>
+        <div class="install-alt" style="margin-bottom: 4px">
+          Homebrew: <code>brew tap dr5hn/tap &amp;&amp; brew install ccm</code>
+        </div>
+        <div class="install-alt" style="margin-bottom: 4px">
+          npm: <code>npm install -g @dr5hn/ccm</code>
+        </div>
+        <div class="install-alt" style="margin-bottom: 4px">
+          Skill: <code>npx skills add dr5hn/ccm@ccm</code>
+        </div>
+        <div class="install-alt">
+          Or clone manually:
+          <code
+            >git clone https://github.com/dr5hn/ccm.git &amp;&amp; cd ccm
+            &amp;&amp; ./install.sh</code
+          >
         </div>
       </div>
-      <div class="cmd-group-body">
-        <table class="cmd-table">
-          <tr><td>ccm watch</td><td>Monitor rate limits for active account</td></tr>
-          <tr><td>ccm watch --threshold N</td><td>Set usage % threshold for alerts</td></tr>
-          <tr><td>ccm watch --threshold N --auto</td><td>Auto-switch account on rate limit</td></tr>
-        </table>
+    </section>
+    <section class="social-proof" id="social-proof">
+      <div class="proof-items">
+        <a href="https://github.com/dr5hn/ccm" target="_blank" rel="noopener"
+          ><img
+            src="https://img.shields.io/github/stars/dr5hn/ccm?style=flat&amp;color=38bdf8&amp;labelColor=0d1117"
+            alt="GitHub stars"
+            height="20"
+        /></a>
+        <span class="proof-divider">·</span>
+        <span>MIT Licensed</span>
+        <span class="proof-divider">·</span>
+        <span>bash 4.4+</span>
+        <span class="proof-divider">·</span>
+        <span>Zero dependencies beyond jq</span>
       </div>
-    </div>
+    </section>
+    <section class="commands" id="commands">
+      <div class="container reveal">
+        <div class="section-label">Command Reference</div>
 
-    <div class="cmd-group" data-accordion>
-      <div class="cmd-group-header" onclick="toggleAccordion(this)">
-        <span class="cmd-group-title">Usage Stats</span>
-        <div class="cmd-group-meta">
-          <span class="cmd-count">4 commands</span>
-          <span class="cmd-chevron">▼</span>
+        <div class="cmd-group open" data-accordion>
+          <div class="cmd-group-header" onclick="toggleAccordion(this)">
+            <span class="cmd-group-title">Account Management</span>
+            <div class="cmd-group-meta">
+              <span class="cmd-count">16 commands</span>
+              <span class="cmd-chevron">▼</span>
+            </div>
+          </div>
+          <div class="cmd-group-body">
+            <table class="cmd-table">
+              <tr>
+                <td>ccm add</td>
+                <td>Add current account</td>
+              </tr>
+              <tr>
+                <td>ccm remove &lt;id&gt;</td>
+                <td>Remove account by number, email, project ID, or alias</td>
+              </tr>
+              <tr>
+                <td>ccm switch [id]</td>
+                <td>Switch account (next, specific, or project-bound)</td>
+              </tr>
+              <tr>
+                <td>ccm undo</td>
+                <td>Revert last switch</td>
+              </tr>
+              <tr>
+                <td>ccm list</td>
+                <td>List managed accounts</td>
+              </tr>
+              <tr>
+                <td>ccm alias &lt;id&gt; &lt;name&gt;</td>
+                <td>Set account alias</td>
+              </tr>
+              <tr>
+                <td>ccm reorder &lt;from&gt; &lt;to&gt;</td>
+                <td>Reorder account positions</td>
+              </tr>
+              <tr>
+                <td>ccm bind [path] &lt;account&gt;</td>
+                <td>Bind project directory to an account</td>
+              </tr>
+              <tr>
+                <td>ccm unbind [path]</td>
+                <td>Remove project binding</td>
+              </tr>
+              <tr>
+                <td>ccm bind list</td>
+                <td>Show all project bindings</td>
+              </tr>
+              <tr>
+                <td>ccm hook</td>
+                <td>Shell hook for auto-switch on cd (global mode)</td>
+              </tr>
+              <tr>
+                <td>ccm hook --isolated</td>
+                <td>
+                  Hook that sets CLAUDE_CONFIG_DIR per-shell — safe for
+                  concurrent terminals
+                </td>
+              </tr>
+              <tr>
+                <td>ccm verify [id]</td>
+                <td>Verify backup integrity</td>
+              </tr>
+              <tr>
+                <td>ccm history</td>
+                <td>Show switch history</td>
+              </tr>
+              <tr>
+                <td>ccm export &lt;path&gt;</td>
+                <td>Export accounts to archive</td>
+              </tr>
+              <tr>
+                <td>ccm import &lt;path&gt;</td>
+                <td>Import from archive</td>
+              </tr>
+              <tr>
+                <td>ccm switch --isolated &lt;id&gt;</td>
+                <td>Switch with isolated CLAUDE_CONFIG_DIR</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="cmd-group" data-accordion>
+          <div class="cmd-group-header" onclick="toggleAccordion(this)">
+            <span class="cmd-group-title">Session Management</span>
+            <div class="cmd-group-meta">
+              <span class="cmd-count">6 commands</span>
+              <span class="cmd-chevron">▼</span>
+            </div>
+          </div>
+          <div class="cmd-group-body">
+            <table class="cmd-table">
+              <tr>
+                <td>ccm session list</td>
+                <td>List all project sessions</td>
+              </tr>
+              <tr>
+                <td>ccm session info &lt;path&gt;</td>
+                <td>Session details for a project</td>
+              </tr>
+              <tr>
+                <td>ccm session search &lt;query&gt; [--limit N]</td>
+                <td>Full-text search across all sessions</td>
+              </tr>
+              <tr>
+                <td>ccm session relocate &lt;old&gt; &lt;new&gt;</td>
+                <td>Move sessions after project relocation</td>
+              </tr>
+              <tr>
+                <td>ccm session clean [--dry-run]</td>
+                <td>Remove orphaned sessions</td>
+              </tr>
+              <tr>
+                <td>ccm session archive [--days N]</td>
+                <td>Compress old sessions to save disk</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="cmd-group" data-accordion>
+          <div class="cmd-group-header" onclick="toggleAccordion(this)">
+            <span class="cmd-group-title">Environment</span>
+            <div class="cmd-group-meta">
+              <span class="cmd-count">5 commands</span>
+              <span class="cmd-chevron">▼</span>
+            </div>
+          </div>
+          <div class="cmd-group-body">
+            <table class="cmd-table">
+              <tr>
+                <td>ccm env snapshot [name]</td>
+                <td>Save current environment</td>
+              </tr>
+              <tr>
+                <td>ccm env restore &lt;name&gt; [--force]</td>
+                <td>Restore from snapshot</td>
+              </tr>
+              <tr>
+                <td>ccm env list</td>
+                <td>List snapshots</td>
+              </tr>
+              <tr>
+                <td>ccm env delete &lt;name&gt;</td>
+                <td>Remove a snapshot</td>
+              </tr>
+              <tr>
+                <td>ccm env audit</td>
+                <td>Audit MCP token efficiency</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="cmd-group" data-accordion>
+          <div class="cmd-group-header" onclick="toggleAccordion(this)">
+            <span class="cmd-group-title">Health &amp; Maintenance</span>
+            <div class="cmd-group-meta">
+              <span class="cmd-count">10 commands</span>
+              <span class="cmd-chevron">▼</span>
+            </div>
+          </div>
+          <div class="cmd-group-body">
+            <table class="cmd-table">
+              <tr>
+                <td>ccm doctor</td>
+                <td>
+                  13 health checks (disk, tmp, processes, hooks, locks, cache)
+                </td>
+              </tr>
+              <tr>
+                <td>ccm doctor --fix</td>
+                <td>Auto-fix safe issues</td>
+              </tr>
+              <tr>
+                <td>ccm clean debug [--days N]</td>
+                <td>Clean debug logs (default: 30 days)</td>
+              </tr>
+              <tr>
+                <td>ccm clean telemetry</td>
+                <td>Remove telemetry data</td>
+              </tr>
+              <tr>
+                <td>ccm clean todos [--days N]</td>
+                <td>Remove old todo files</td>
+              </tr>
+              <tr>
+                <td>ccm clean history [--keep N]</td>
+                <td>Trim history (default: keep 1000)</td>
+              </tr>
+              <tr>
+                <td>ccm clean tmp [--days N]</td>
+                <td>Clean orphaned tmp output files (default: 1 day)</td>
+              </tr>
+              <tr>
+                <td>ccm clean processes</td>
+                <td>Kill orphaned Claude subagent processes</td>
+              </tr>
+              <tr>
+                <td>ccm clean cache</td>
+                <td>Clean plugin cache</td>
+              </tr>
+              <tr>
+                <td>ccm clean all [--dry-run]</td>
+                <td>Clean everything safe</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="cmd-group" data-accordion>
+          <div class="cmd-group-header" onclick="toggleAccordion(this)">
+            <span class="cmd-group-title">Rate Limit Watcher</span>
+            <div class="cmd-group-meta">
+              <span class="cmd-count">3 commands</span>
+              <span class="cmd-chevron">▼</span>
+            </div>
+          </div>
+          <div class="cmd-group-body">
+            <table class="cmd-table">
+              <tr>
+                <td>ccm watch</td>
+                <td>Monitor rate limits for active account</td>
+              </tr>
+              <tr>
+                <td>ccm watch --threshold N</td>
+                <td>Set usage % threshold for alerts</td>
+              </tr>
+              <tr>
+                <td>ccm watch --threshold N --auto</td>
+                <td>Auto-switch account on rate limit</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="cmd-group" data-accordion>
+          <div class="cmd-group-header" onclick="toggleAccordion(this)">
+            <span class="cmd-group-title">Usage Stats</span>
+            <div class="cmd-group-meta">
+              <span class="cmd-count">4 commands</span>
+              <span class="cmd-chevron">▼</span>
+            </div>
+          </div>
+          <div class="cmd-group-body">
+            <table class="cmd-table">
+              <tr>
+                <td>ccm usage summary</td>
+                <td>Claude Code footprint overview</td>
+              </tr>
+              <tr>
+                <td>ccm usage top [--count N]</td>
+                <td>Top projects by disk usage</td>
+              </tr>
+              <tr>
+                <td>ccm usage history [--days N] [--project &lt;path&gt;]</td>
+                <td>Token usage by project and day</td>
+              </tr>
+              <tr>
+                <td>ccm usage dashboard</td>
+                <td>Per-account token usage dashboard</td>
+              </tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="cmd-group" data-accordion>
+          <div class="cmd-group-header" onclick="toggleAccordion(this)">
+            <span class="cmd-group-title">Setup &amp; Tools</span>
+            <div class="cmd-group-meta">
+              <span class="cmd-count">4 commands</span>
+              <span class="cmd-chevron">▼</span>
+            </div>
+          </div>
+          <div class="cmd-group-body">
+            <table class="cmd-table">
+              <tr>
+                <td>ccm setup</td>
+                <td>Interactive first-run onboarding wizard</td>
+              </tr>
+              <tr>
+                <td>ccm init [--force]</td>
+                <td>Generate .claudeignore for detected project type</td>
+              </tr>
+              <tr>
+                <td>ccm permissions audit [--fix]</td>
+                <td>Scan for duplicate/dead permission rules</td>
+              </tr>
+              <tr>
+                <td>ccm statusline [install|remove]</td>
+                <td>Install/remove smart status bar in Claude Code</td>
+              </tr>
+            </table>
+          </div>
         </div>
       </div>
-      <div class="cmd-group-body">
-        <table class="cmd-table">
-          <tr><td>ccm usage summary</td><td>Claude Code footprint overview</td></tr>
-          <tr><td>ccm usage top [--count N]</td><td>Top projects by disk usage</td></tr>
-          <tr><td>ccm usage history [--days N] [--project &lt;path&gt;]</td><td>Token usage by project and day</td></tr>
-          <tr><td>ccm usage dashboard</td><td>Per-account token usage dashboard</td></tr>
-        </table>
-      </div>
-    </div>
-
-    <div class="cmd-group" data-accordion>
-      <div class="cmd-group-header" onclick="toggleAccordion(this)">
-        <span class="cmd-group-title">Setup &amp; Tools</span>
-        <div class="cmd-group-meta">
-          <span class="cmd-count">4 commands</span>
-          <span class="cmd-chevron">▼</span>
-        </div>
-      </div>
-      <div class="cmd-group-body">
-        <table class="cmd-table">
-          <tr><td>ccm setup</td><td>Interactive first-run onboarding wizard</td></tr>
-          <tr><td>ccm init [--force]</td><td>Generate .claudeignore for detected project type</td></tr>
-          <tr><td>ccm permissions audit [--fix]</td><td>Scan for duplicate/dead permission rules</td></tr>
-          <tr><td>ccm statusline [install|remove]</td><td>Install/remove smart status bar in Claude Code</td></tr>
-        </table>
-      </div>
-    </div>
-  </div>
-</section>
-  <footer class="footer" id="footer">
-  MIT License · <a href="https://github.com/dr5hn/ccm" target="_blank" rel="noopener">GitHub</a> · Made for Claude Code power users
-</footer>
-<script>
-function copyInstallMain() {
-  var text = 'curl -fsSL https://raw.githubusercontent.com/dr5hn/ccm/main/install.sh | bash';
-  navigator.clipboard.writeText(text).then(function() {
-    var btn = document.getElementById('mainCopyBtn');
-    btn.textContent = 'COPIED';
-    setTimeout(function() { btn.textContent = 'COPY'; }, 2000);
-  });
-}
-
-function copyInstall() {
-  var text = 'curl -fsSL https://raw.githubusercontent.com/dr5hn/ccm/main/install.sh | bash';
-  navigator.clipboard.writeText(text).then(function() {
-    var btn = document.getElementById('heroCopyBtn');
-    btn.textContent = 'COPIED';
-    setTimeout(function() { btn.textContent = 'COPY'; }, 2000);
-  });
-}
-
-var demos = {
-  accounts: [
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'ccm list' },
-    { type: 'blank' },
-    { type: 'output', text: 'Managed Accounts:' },
-    { type: 'blank' },
-    { type: 'active', text: '  1  ★  darshan@personal.dev    [personal]    healthy' },
-    { type: 'output', text: '  2     darshan@company.com     [work]        healthy' },
-    { type: 'output', text: '  3     client@agency.io        [client]      healthy' },
-    { type: 'blank' },
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'ccm switch work' },
-    { type: 'blank' },
-    { type: 'success', text: '✓ Switched: personal → work (darshan@company.com)' },
-    { type: 'muted', text: '  Please restart Claude Code to use the new authentication.' },
-    { type: 'blank' },
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'ccm switch --isolated client' },
-    { type: 'blank' },
-    { type: 'success', text: '✓ Isolated session: client (client@agency.io)' },
-    { type: 'muted', text: '  CLAUDE_CONFIG_DIR=~/.claude-isolated/client' }
-  ],
-  bindings: [
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'ccm bind . work' },
-    { type: 'blank' },
-    { type: 'success', text: '✓ Bound ~/projects/my-saas-app → Account-2 (darshan@company.com)' },
-    { type: 'muted',  text: "  Running 'ccm switch' in this directory will auto-switch to this account." },
-    { type: 'blank' },
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'ccm bind list' },
-    { type: 'blank' },
-    { type: 'output', text: 'Project                                        Account' },
-    { type: 'muted',  text: '-------                                        -------' },
-    { type: 'output', text: '~/projects/my-saas-app                         2: darshan@company.com [work]' },
-    { type: 'output', text: '~/projects/agency-client                       3: client@agency.io [client]' },
-    { type: 'blank' },
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'ccm switch' },
-    { type: 'blank' },
-    { type: 'active', text: 'i Project binding: switching to Account-2 (darshan@company.com)' },
-    { type: 'success', text: '✓ Switched: personal → work' },
-    { type: 'blank' },
-    { type: 'muted',  text: '# Auto-switch on cd (add to ~/.zshrc) — isolated mode is concurrent-terminal safe:' },
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'eval "$(ccm hook --isolated)"' },
-    { type: 'blank' },
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'cd ~/projects/my-saas-app' },
-    { type: 'active', text: '[ccm] Isolated profile active: work (account 2)' },
-    { type: 'muted',  text: '  CLAUDE_CONFIG_DIR=~/.claude-switch-backup/profiles/work' }
-  ],
-  sessions: [
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'ccm session search "API endpoint"' },
-    { type: 'blank' },
-    { type: 'output', text: 'Session Search: "API endpoint"' },
-    { type: 'blank' },
-    { type: 'active', text: '  1. ~/projects/my-saas-app' },
-    { type: 'muted',  text: '     2026-03-28 14:22:05' },
-    { type: 'output', text: '     Added REST API endpoint for user authentication with JWT...' },
-    { type: 'blank' },
-    { type: 'active', text: '  2. ~/projects/api-gateway' },
-    { type: 'muted',  text: '     2026-03-27 09:15:33' },
-    { type: 'output', text: '     Refactored API endpoint routing to support versioned paths...' },
-    { type: 'blank' },
-    { type: 'output', text: 'Found 2 result(s)' }
-  ],
-  tokens: [
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'ccm usage history --days 7' },
-    { type: 'blank' },
-    { type: 'output', text: 'Token Usage History (last 7 days)' },
-    { type: 'muted',  text: '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' },
-    { type: 'blank' },
-    { type: 'output', text: 'Per-Project Breakdown:' },
-    { type: 'blank' },
-    { type: 'muted',  text: '  Project                                       Input       Output        Total' },
-    { type: 'muted',  text: '  -------                                       -----       ------        -----' },
-    { type: 'active', text: '  ~/projects/my-saas-app                   12,841,022      189,445   13,030,467' },
-    { type: 'output', text: '  ~/projects/api-gateway                    8,234,811      112,334    8,347,145' },
-    { type: 'output', text: '  ~/projects/agency-client                  3,445,290       54,221    3,499,511' },
-    { type: 'blank' },
-    { type: 'output', text: 'Per-Day Breakdown:' },
-    { type: 'blank' },
-    { type: 'muted',  text: '  Date              Input       Output        Total' },
-    { type: 'muted',  text: '  ----              -----       ------        -----' },
-    { type: 'output', text: '  2026-03-28    5,102,445       72,891    5,175,336' },
-    { type: 'output', text: '  2026-03-27    8,234,111      124,556    8,358,667' },
-    { type: 'output', text: '  2026-03-26   11,184,567      158,553   11,343,120' },
-    { type: 'blank' },
-    { type: 'output', text: 'Grand total:          24,877,123' }
-  ],
-  watch: [
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'ccm watch --threshold 85 --auto' },
-    { type: 'blank' },
-    { type: 'output', text: 'Rate Limit Watcher' },
-    { type: 'muted',  text: '━━━━━━━━━━━━━━━━━━' },
-    { type: 'blank' },
-    { type: 'output', text: '  Account            Usage     Limit     Status' },
-    { type: 'muted',  text: '  -------            -----     -----     ------' },
-    { type: 'warn',   text: '  1: personal        87%       1M/5m     NEAR LIMIT' },
-    { type: 'success', text: '  2: work            34%       1M/5m     OK' },
-    { type: 'success', text: '  3: client          12%       1M/5m     OK' },
-    { type: 'blank' },
-    { type: 'active', text: 'i Account 1 exceeded 85% threshold' },
-    { type: 'success', text: '✓ Auto-switched: personal → work (darshan@company.com)' },
-    { type: 'muted',  text: '  Watching continues. Next check in 60s.' }
-  ],
-  doctor: [
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'ccm doctor' },
-    { type: 'blank' },
-    { type: 'output', text: 'CCM Doctor — Health Check' },
-    { type: 'muted',  text: '━━━━━━━━━━━━━━━━━━━━━━━━━' },
-    { type: 'blank' },
-    { type: 'success', text: '✓ Lock files               No stale locks found' },
-    { type: 'warn',   text: '⚠ Debug logs               62 MB (87 files older than 30 days)' },
-    { type: 'warn',   text: '⚠ Plugin cache             321 MB (consider cleanup)' },
-    { type: 'warn',   text: '⚠ Telemetry                33 MB (88 files)' },
-    { type: 'success', text: '✓ Orphaned sessions        No orphaned sessions found' },
-    { type: 'success', text: '✓ Total ~/.claude size     914 MB' },
-    { type: 'warn',   text: '⚠ Tmp output files         2.3 GB (47 files older than 1 day)' },
-    { type: 'success', text: '✓ Orphaned processes       None detected' },
-    { type: 'success', text: '✓ Hook async config        All hooks properly configured' },
-    { type: 'blank' },
-    { type: 'output', text: '4 issues found, ~2.7 GB recoverable' },
-    { type: 'muted',  text: "Run 'ccm doctor --fix' to auto-fix safe issues." }
-  ],
-  permissions: [
-    { type: 'prompt', text: '$ ' },
-    { type: 'cmd', text: 'ccm permissions audit' },
-    { type: 'blank' },
-    { type: 'output', text: 'Permission Rules Audit' },
-    { type: 'muted',  text: '━━━━━━━━━━━━━━━━━━━━━━' },
-    { type: 'blank' },
-    { type: 'output', text: 'settings.json:' },
-    { type: 'output', text: '  Rules: 38 allow, 24 deny, 0 ask (62 total)' },
-    { type: 'success', text: '  ✓ No duplicates' },
-    { type: 'success', text: '  ✓ No contradictions' },
-    { type: 'warn',   text: '  ⚠ Verbatim rules: 4 Bash rules without wildcards' },
-    { type: 'muted',  text: '     Bash(yarn lint)' },
-    { type: 'muted',  text: '     Bash(yarn build)' },
-    { type: 'muted',  text: '     Bash(npm run lint)' },
-    { type: 'warn',   text: '  ⚠ 62 rules — approaching bloat threshold' },
-    { type: 'blank' },
-    { type: 'output', text: 'settings.local.json:' },
-    { type: 'warn',   text: '  ⚠ Duplicates: 3 in allow' },
-    { type: 'muted',  text: '     Bash(do) (x4)' },
-    { type: 'blank' },
-    { type: 'output', text: "Run 'ccm permissions audit --fix' to auto-fix duplicates." }
-  ]
-};
-
-var currentDemo = 'accounts';
-var animating = false;
-
-function typeText(element, text, callback) {
-  var i = 0;
-  var interval = setInterval(function() {
-    element.textContent += text[i];
-    i++;
-    if (i >= text.length) {
-      clearInterval(interval);
-      if (callback) callback();
-    }
-  }, 30);
-}
-
-function renderDemo(name) {
-  if (animating) return;
-  currentDemo = name;
-  animating = true;
-
-  document.querySelectorAll('.demo-tab').forEach(function(t) { t.classList.remove('active'); });
-  document.querySelector('[data-demo="' + name + '"]').classList.add('active');
-
-  var terminal = document.getElementById('terminal');
-  terminal.textContent = '';
-
-  var lines = demos[name];
-  // Reset any _skip flags from previous renders
-  lines.forEach(function(l) { l._skip = false; });
-
-  var pendingLines = [];
-
-  lines.forEach(function(line, i) {
-    if (line._skip) return;
-
-    var div = document.createElement('div');
-    div.className = 'term-line';
-
-    if (line.type === 'blank') {
-      div.textContent = '\u00A0';
-    } else if (line.type === 'prompt') {
-      var promptSpan = document.createElement('span');
-      promptSpan.className = 't-prompt';
-      promptSpan.textContent = line.text;
-      div.appendChild(promptSpan);
-
-      // Merge with next cmd line — typing animation
-      if (lines[i + 1] && lines[i + 1].type === 'cmd') {
-        var cmdSpan = document.createElement('span');
-        cmdSpan.className = 't-cmd';
-        div.appendChild(cmdSpan);
-        lines[i + 1]._skip = true;
-
-        pendingLines.push({
-          div: div,
-          typing: true,
-          cmdSpan: cmdSpan,
-          cmdText: lines[i + 1].text
+    </section>
+    <footer class="footer" id="footer">
+      MIT License ·
+      <a href="https://github.com/dr5hn/ccm" target="_blank" rel="noopener"
+        >GitHub</a
+      >
+      · Made for Claude Code power users
+    </footer>
+    <script>
+      function copyInstallMain() {
+        var text =
+          "curl -fsSL https://raw.githubusercontent.com/dr5hn/ccm/main/install.sh | bash";
+        navigator.clipboard.writeText(text).then(function () {
+          var btn = document.getElementById("mainCopyBtn");
+          btn.textContent = "COPIED";
+          setTimeout(function () {
+            btn.textContent = "COPY";
+          }, 2000);
         });
-        terminal.appendChild(div);
-        return;
       }
-    } else {
-      var clsMap = {
-        output: 't-output', success: 't-success', muted: 't-muted',
-        warn: 't-warn', active: 't-active', cmd: 't-cmd'
+
+      function copyInstall() {
+        var text =
+          "curl -fsSL https://raw.githubusercontent.com/dr5hn/ccm/main/install.sh | bash";
+        navigator.clipboard.writeText(text).then(function () {
+          var btn = document.getElementById("heroCopyBtn");
+          btn.textContent = "COPIED";
+          setTimeout(function () {
+            btn.textContent = "COPY";
+          }, 2000);
+        });
+      }
+
+      var demos = {
+        accounts: [
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: "ccm list" },
+          { type: "blank" },
+          { type: "output", text: "Managed Accounts:" },
+          { type: "blank" },
+          {
+            type: "active",
+            text: "  1  ★  darshan@personal.dev    [personal]    healthy",
+          },
+          {
+            type: "output",
+            text: "  2     darshan@company.com     [work]        healthy",
+          },
+          {
+            type: "output",
+            text: "  3     vertex:some-project-id [gcp]         healthy",
+          },
+          { type: "blank" },
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: "ccm switch work" },
+          { type: "blank" },
+          {
+            type: "success",
+            text: "✓ Switched: personal → work (darshan@company.com)",
+          },
+          {
+            type: "muted",
+            text: "  Please restart Claude Code to use the new authentication.",
+          },
+          { type: "blank" },
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: "ccm switch --isolated gcp" },
+          { type: "blank" },
+          {
+            type: "success",
+            text: "✓ Isolated session: gcp (vertex:some-project-id)",
+          },
+          {
+            type: "muted",
+            text: "  CLAUDE_CONFIG_DIR=~/.claude-switch-backup/profiles/gcp",
+          },
+        ],
+        bindings: [
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: "ccm bind . work" },
+          { type: "blank" },
+          {
+            type: "success",
+            text: "✓ Bound ~/projects/my-saas-app → Account-2 (darshan@company.com)",
+          },
+          {
+            type: "muted",
+            text: "  Running 'ccm switch' in this directory will auto-switch to this account.",
+          },
+          { type: "blank" },
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: "ccm bind list" },
+          { type: "blank" },
+          {
+            type: "output",
+            text: "Project                                        Account",
+          },
+          {
+            type: "muted",
+            text: "-------                                        -------",
+          },
+          {
+            type: "output",
+            text: "~/projects/my-saas-app                         2: darshan@company.com [work]",
+          },
+          {
+            type: "output",
+            text: "~/projects/gcp-infra                           3: vertex:some-project-id [gcp]",
+          },
+          { type: "blank" },
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: "ccm switch" },
+          { type: "blank" },
+          {
+            type: "active",
+            text: "i Project binding: switching to Account-2 (darshan@company.com)",
+          },
+          { type: "success", text: "✓ Switched: personal → work" },
+          { type: "blank" },
+          {
+            type: "muted",
+            text: "# Auto-switch on cd (add to ~/.zshrc) — isolated mode is concurrent-terminal safe:",
+          },
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: 'eval "$(ccm hook --isolated)"' },
+          { type: "blank" },
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: "cd ~/projects/my-saas-app" },
+          {
+            type: "active",
+            text: "[ccm] Isolated profile active: work (account 2)",
+          },
+          {
+            type: "muted",
+            text: "  CLAUDE_CONFIG_DIR=~/.claude-switch-backup/profiles/work",
+          },
+        ],
+        sessions: [
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: 'ccm session search "API endpoint"' },
+          { type: "blank" },
+          { type: "output", text: 'Session Search: "API endpoint"' },
+          { type: "blank" },
+          { type: "active", text: "  1. ~/projects/my-saas-app" },
+          { type: "muted", text: "     2026-03-28 14:22:05" },
+          {
+            type: "output",
+            text: "     Added REST API endpoint for user authentication with JWT...",
+          },
+          { type: "blank" },
+          { type: "active", text: "  2. ~/projects/api-gateway" },
+          { type: "muted", text: "     2026-03-27 09:15:33" },
+          {
+            type: "output",
+            text: "     Refactored API endpoint routing to support versioned paths...",
+          },
+          { type: "blank" },
+          { type: "output", text: "Found 2 result(s)" },
+        ],
+        tokens: [
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: "ccm usage history --days 7" },
+          { type: "blank" },
+          { type: "output", text: "Token Usage History (last 7 days)" },
+          { type: "muted", text: "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" },
+          { type: "blank" },
+          { type: "output", text: "Per-Project Breakdown:" },
+          { type: "blank" },
+          {
+            type: "muted",
+            text: "  Project                                       Input       Output        Total",
+          },
+          {
+            type: "muted",
+            text: "  -------                                       -----       ------        -----",
+          },
+          {
+            type: "active",
+            text: "  ~/projects/my-saas-app                   12,841,022      189,445   13,030,467",
+          },
+          {
+            type: "output",
+            text: "  ~/projects/api-gateway                    8,234,811      112,334    8,347,145",
+          },
+          {
+            type: "output",
+            text: "  ~/projects/agency-client                  3,445,290       54,221    3,499,511",
+          },
+          { type: "blank" },
+          { type: "output", text: "Per-Day Breakdown:" },
+          { type: "blank" },
+          {
+            type: "muted",
+            text: "  Date              Input       Output        Total",
+          },
+          {
+            type: "muted",
+            text: "  ----              -----       ------        -----",
+          },
+          {
+            type: "output",
+            text: "  2026-03-28    5,102,445       72,891    5,175,336",
+          },
+          {
+            type: "output",
+            text: "  2026-03-27    8,234,111      124,556    8,358,667",
+          },
+          {
+            type: "output",
+            text: "  2026-03-26   11,184,567      158,553   11,343,120",
+          },
+          { type: "blank" },
+          { type: "output", text: "Grand total:          24,877,123" },
+        ],
+        watch: [
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: "ccm watch --threshold 85 --auto" },
+          { type: "blank" },
+          { type: "output", text: "Rate Limit Watcher" },
+          { type: "muted", text: "━━━━━━━━━━━━━━━━━━" },
+          { type: "blank" },
+          {
+            type: "output",
+            text: "  Account            Usage     Limit     Status",
+          },
+          {
+            type: "muted",
+            text: "  -------            -----     -----     ------",
+          },
+          {
+            type: "warn",
+            text: "  1: personal        87%       1M/5m     NEAR LIMIT",
+          },
+          {
+            type: "success",
+            text: "  2: work            34%       1M/5m     OK",
+          },
+          {
+            type: "success",
+            text: "  3: gcp             12%       1M/5m     OK",
+          },
+          { type: "blank" },
+          { type: "active", text: "i Account 1 exceeded 85% threshold" },
+          {
+            type: "success",
+            text: "✓ Auto-switched: personal → work (darshan@company.com)",
+          },
+          { type: "muted", text: "  Watching continues. Next check in 60s." },
+        ],
+        doctor: [
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: "ccm doctor" },
+          { type: "blank" },
+          { type: "output", text: "CCM Doctor — Health Check" },
+          { type: "muted", text: "━━━━━━━━━━━━━━━━━━━━━━━━━" },
+          { type: "blank" },
+          {
+            type: "success",
+            text: "✓ Lock files               No stale locks found",
+          },
+          {
+            type: "warn",
+            text: "⚠ Debug logs               62 MB (87 files older than 30 days)",
+          },
+          {
+            type: "warn",
+            text: "⚠ Plugin cache             321 MB (consider cleanup)",
+          },
+          { type: "warn", text: "⚠ Telemetry                33 MB (88 files)" },
+          {
+            type: "success",
+            text: "✓ Orphaned sessions        No orphaned sessions found",
+          },
+          { type: "success", text: "✓ Total ~/.claude size     914 MB" },
+          {
+            type: "warn",
+            text: "⚠ Tmp output files         2.3 GB (47 files older than 1 day)",
+          },
+          { type: "success", text: "✓ Orphaned processes       None detected" },
+          {
+            type: "success",
+            text: "✓ Hook async config        All hooks properly configured",
+          },
+          { type: "blank" },
+          { type: "output", text: "4 issues found, ~2.7 GB recoverable" },
+          {
+            type: "muted",
+            text: "Run 'ccm doctor --fix' to auto-fix safe issues.",
+          },
+        ],
+        permissions: [
+          { type: "prompt", text: "$ " },
+          { type: "cmd", text: "ccm permissions audit" },
+          { type: "blank" },
+          { type: "output", text: "Permission Rules Audit" },
+          { type: "muted", text: "━━━━━━━━━━━━━━━━━━━━━━" },
+          { type: "blank" },
+          { type: "output", text: "settings.json:" },
+          {
+            type: "output",
+            text: "  Rules: 38 allow, 24 deny, 0 ask (62 total)",
+          },
+          { type: "success", text: "  ✓ No duplicates" },
+          { type: "success", text: "  ✓ No contradictions" },
+          {
+            type: "warn",
+            text: "  ⚠ Verbatim rules: 4 Bash rules without wildcards",
+          },
+          { type: "muted", text: "     Bash(yarn lint)" },
+          { type: "muted", text: "     Bash(yarn build)" },
+          { type: "muted", text: "     Bash(npm run lint)" },
+          { type: "warn", text: "  ⚠ 62 rules — approaching bloat threshold" },
+          { type: "blank" },
+          { type: "output", text: "settings.local.json:" },
+          { type: "warn", text: "  ⚠ Duplicates: 3 in allow" },
+          { type: "muted", text: "     Bash(do) (x4)" },
+          { type: "blank" },
+          {
+            type: "output",
+            text: "Run 'ccm permissions audit --fix' to auto-fix duplicates.",
+          },
+        ],
       };
-      var span = document.createElement('span');
-      span.className = clsMap[line.type] || 't-output';
-      span.textContent = line.text;
-      div.appendChild(span);
-    }
 
-    pendingLines.push({ div: div, typing: false });
-    terminal.appendChild(div);
-  });
+      var currentDemo = "accounts";
+      var animating = false;
 
-  // Animate lines sequentially
-  var lineIndex = 0;
+      function typeText(element, text, callback) {
+        var i = 0;
+        var interval = setInterval(function () {
+          element.textContent += text[i];
+          i++;
+          if (i >= text.length) {
+            clearInterval(interval);
+            if (callback) callback();
+          }
+        }, 30);
+      }
 
-  function showNextLine() {
-    if (lineIndex >= pendingLines.length) {
-      animating = false;
-      return;
-    }
+      function renderDemo(name) {
+        if (animating) return;
+        currentDemo = name;
+        animating = true;
 
-    var item = pendingLines[lineIndex];
-    item.div.classList.add('visible');
-    lineIndex++;
+        document.querySelectorAll(".demo-tab").forEach(function (t) {
+          t.classList.remove("active");
+        });
+        document
+          .querySelector('[data-demo="' + name + '"]')
+          .classList.add("active");
 
-    if (item.typing) {
-      // Type the command text character by character
-      typeText(item.cmdSpan, item.cmdText, function() {
-        setTimeout(showNextLine, 100);
+        var terminal = document.getElementById("terminal");
+        terminal.textContent = "";
+
+        var lines = demos[name];
+        // Reset any _skip flags from previous renders
+        lines.forEach(function (l) {
+          l._skip = false;
+        });
+
+        var pendingLines = [];
+
+        lines.forEach(function (line, i) {
+          if (line._skip) return;
+
+          var div = document.createElement("div");
+          div.className = "term-line";
+
+          if (line.type === "blank") {
+            div.textContent = "\u00A0";
+          } else if (line.type === "prompt") {
+            var promptSpan = document.createElement("span");
+            promptSpan.className = "t-prompt";
+            promptSpan.textContent = line.text;
+            div.appendChild(promptSpan);
+
+            // Merge with next cmd line — typing animation
+            if (lines[i + 1] && lines[i + 1].type === "cmd") {
+              var cmdSpan = document.createElement("span");
+              cmdSpan.className = "t-cmd";
+              div.appendChild(cmdSpan);
+              lines[i + 1]._skip = true;
+
+              pendingLines.push({
+                div: div,
+                typing: true,
+                cmdSpan: cmdSpan,
+                cmdText: lines[i + 1].text,
+              });
+              terminal.appendChild(div);
+              return;
+            }
+          } else {
+            var clsMap = {
+              output: "t-output",
+              success: "t-success",
+              muted: "t-muted",
+              warn: "t-warn",
+              active: "t-active",
+              cmd: "t-cmd",
+            };
+            var span = document.createElement("span");
+            span.className = clsMap[line.type] || "t-output";
+            span.textContent = line.text;
+            div.appendChild(span);
+          }
+
+          pendingLines.push({ div: div, typing: false });
+          terminal.appendChild(div);
+        });
+
+        // Animate lines sequentially
+        var lineIndex = 0;
+
+        function showNextLine() {
+          if (lineIndex >= pendingLines.length) {
+            animating = false;
+            return;
+          }
+
+          var item = pendingLines[lineIndex];
+          item.div.classList.add("visible");
+          lineIndex++;
+
+          if (item.typing) {
+            // Type the command text character by character
+            typeText(item.cmdSpan, item.cmdText, function () {
+              setTimeout(showNextLine, 100);
+            });
+          } else {
+            setTimeout(showNextLine, 50);
+          }
+        }
+
+        setTimeout(showNextLine, 200);
+      }
+
+      document.querySelectorAll(".demo-tab").forEach(function (tab) {
+        tab.addEventListener("click", function () {
+          renderDemo(tab.dataset.demo);
+        });
       });
-    } else {
-      setTimeout(showNextLine, 50);
-    }
-  }
 
-  setTimeout(showNextLine, 200);
-}
+      var observer = new IntersectionObserver(
+        function (entries) {
+          entries.forEach(function (entry) {
+            if (entry.isIntersecting) {
+              entry.target.classList.add("visible");
+            }
+          });
+        },
+        { threshold: 0.1 },
+      );
 
-document.querySelectorAll('.demo-tab').forEach(function(tab) {
-  tab.addEventListener('click', function() { renderDemo(tab.dataset.demo); });
-});
+      document.querySelectorAll(".reveal").forEach(function (el) {
+        observer.observe(el);
+      });
 
-var observer = new IntersectionObserver(function(entries) {
-  entries.forEach(function(entry) {
-    if (entry.isIntersecting) {
-      entry.target.classList.add('visible');
-    }
-  });
-}, { threshold: 0.1 });
+      window.addEventListener("load", function () {
+        setTimeout(function () {
+          renderDemo("accounts");
+        }, 600);
+      });
 
-document.querySelectorAll('.reveal').forEach(function(el) { observer.observe(el); });
-
-window.addEventListener('load', function() {
-  setTimeout(function() { renderDemo('accounts'); }, 600);
-});
-
-function toggleAccordion(header) {
-  var group = header.parentElement;
-  var wasOpen = group.classList.contains('open');
-  document.querySelectorAll('.cmd-group').forEach(function(g) { g.classList.remove('open'); });
-  if (!wasOpen) {
-    group.classList.add('open');
-  }
-}
-</script>
-</body>
+      function toggleAccordion(header) {
+        var group = header.parentElement;
+        var wasOpen = group.classList.contains("open");
+        document.querySelectorAll(".cmd-group").forEach(function (g) {
+          g.classList.remove("open");
+        });
+        if (!wasOpen) {
+          group.classList.add("open");
+        }
+      }
+    </script>
+  </body>
 </html>

@@ -2,29 +2,52 @@
 
 All notable changes to CCM (Claude Code Manager) will be documented in this file.
 
-## [4.2.0] - 2026-04-25
+## [4.3.0] - 2026-04-08
+
 ### Added
+
+- **Google VertexAI account support** — `ccm add` auto-detects VertexAI sessions (via `CLAUDE_CODE_USE_VERTEX` in settings.json) and registers them as `vertex` type accounts alongside existing OAuth accounts
+- VertexAI accounts display as `vertex:project-id` in `ccm list`, statusline, and all output
+- Account identifiers now accept GCP project IDs in addition to numbers, emails, and aliases
+- Clean switch between OAuth and VertexAI: removes inactive type's config on each transition to prevent ambiguity
+- VertexAI env var backup/restore: full `env` block from settings.json captured as credential equivalent
+- Schema migration 3.1 → 4.0: adds `type: "oauth"` to all existing accounts (additive, zero data loss)
+- `ccm verify` checks VertexAI-specific health (env backup, required keys, service account path)
+- `ccm recover` detects VertexAI credential inconsistencies
+- `ccm export`/`ccm import` handle mixed OAuth + VertexAI account archives
+- Isolated profiles (`ccm switch --isolated`) support VertexAI accounts with correct env var propagation
+- Statusline detects VertexAI sessions and shows `vertex:project-id` as account identity
+- `validate_vertex_project_id()` validates GCP project ID format (lowercase alphanumeric + hyphens, 6-30 chars)
+
+## [4.2.0] - 2026-04-25
+
+### Added
+
 - Statusline now shows the active model (display name) on its own line above the context bar.
 - Statusline shows /effort level next to the model, color-coded by intensity (low=dim, medium=green, high=yellow, xhigh/max=red). Hidden when the active model does not support reasoning effort.
 - Statusline shows the custom session name (set via `--name` or `/rename`) beside model + effort.
 - Statusline shows a `+N -M` indicator of total lines added/removed in the session, next to the burn rate.
 
 ### Fixed
+
 - Statusline rendering corruption when an optional JSON field (e.g. `seven_day` rate limit) was empty: bash `read` with `IFS=$'\t'` collapsed consecutive tabs and shifted later values (version, model, effort) into the wrong variables. Switched the `jq` extractor to ASCII Unit Separator (`\x1f`) so empty fields are preserved.
 
-
 ## [4.1.0] - 2026-04-17
+
 ### Added
+
 - `ccm hook --isolated` — emit a shell hook that activates isolated CLAUDE_CONFIG_DIR profiles per shell on `cd` into a bound directory, instead of rewriting the global active account. Concurrent terminals in different bound directories no longer clobber each other's credentials.
 - `ccm switch --isolated --quiet` — print only the profile path to stdout for use in command substitution; creates the profile on demand.
+
 ### Fixed
+
 - Shell auto-switch hook was silently a no-op under zsh because `_ccm_bindings["$path"]=val` stored keys with literal quote characters, making `${_ccm_bindings[$PWD]}` lookups always miss. Changed to unquoted subscript so bash and zsh agree on the key.
 - `switch_isolated` now returns on error instead of calling `exit`, preserving the calling shell when invoked programmatically (e.g. from the hook).
-
 
 ## [4.0.0] - 2026-04-03
 
 ### Added
+
 - **`ccm switch --isolated <account>`** — create CLAUDE_CONFIG_DIR-based isolated profiles for true concurrent multi-account sessions in different terminals
 - **`ccm profiles list|sync|delete`** — manage isolated profile directories
 - **`ccm watch --threshold N [--auto]`** — background rate limit monitor that notifies or auto-switches accounts when 5-hour usage exceeds threshold
@@ -43,12 +66,14 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 - Statusline uses `CLAUDE_CODE_USER_EMAIL` env var (Claude Code v2.1.51+) as fallback for account detection
 
 ### Removed
+
 - **`ccm status`** — use `ccm list` or Claude Code's native `/status` command
 - **`ccm interactive`** — use direct CLI commands instead
 - **`ccm optimize`** — use Claude Code's native `/insights` command (AI-powered, 3,200 lines)
 - **`ccm launch`** — use Claude Code's native `--permission-mode` flags or `/sandbox` command
 
 ### Changed
+
 - Version bumped to 4.0.0 (major: breaking changes from removed commands)
 - Deprecated commands show migration notices instead of errors
 - Help text updated with all new commands and examples
@@ -59,13 +84,15 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 - GitHub Actions workflow auto-updates Homebrew formula on new releases
 
 ## [3.3.2] - 2026-03-30
-### Fixed
-- Add error checking to Keychain rename during account reorder to prevent silent data inconsistency
 
+### Fixed
+
+- Add error checking to Keychain rename during account reorder to prevent silent data inconsistency
 
 ## [3.3.1] - 2026-03-30
 
 ### Added
+
 - **`ccm hook`** — outputs shell hook code for auto-switching accounts on `cd`. Add `eval "$(ccm hook)"` to `.zshrc`/`.bashrc` and bound projects auto-switch when you enter them
 - Shell hook caches bindings in an associative array at startup (~30ms), then does pure-bash lookups on every `cd` (~0ms overhead)
 - Parent directory matching — binding `~/Personal` matches `~/Personal/projects/foo/src`
@@ -74,6 +101,7 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 - `ccm bind` now shows a tip about `ccm hook` for auto-switch on cd
 
 ### Security
+
 - **Eliminated `eval` command injection** — replaced `eval "$(jq ...)"` in statusline with safe `IFS read` + jq `@tsv` pattern; data is never interpreted as shell code
 - **Fixed temp file race condition** — credential and config writes now use `umask 077` before `mktemp`, ensuring files are owner-only from creation
 - **Added path traversal protection** — new `validate_account_params()` validates account numbers (numeric-only) and emails (regex) before constructing file paths
@@ -85,6 +113,7 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 ## [3.3.0] - 2026-03-28
 
 ### Added
+
 - **`ccm statusline [install|remove]`** — install a smart statusline at the bottom of Claude Code showing context bar, token count, session cost, duration, burn rate, 5hr/7-day rate limits with reset times, project directory, git branch, Claude Code version, and CCM account info
 - **`ccm status --short`** — single-line account output for integrations
 - **Standalone statusline installer** — `curl -fsSL .../statusline.sh | bash` for sharing within orgs without CCM dependency
@@ -93,6 +122,7 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 - Rate limit color coding: green <60%, yellow 60-79%, red 80%+
 
 ### Fixed
+
 - Token count in statusline now matches Claude Code's display (sums input + cache_creation + cache_read)
 - `ccm status` now forwards arguments (was missing `shift` in dispatcher)
 - Statusline reads config from both `~/.claude/.claude.json` and `~/.claude.json` fallback
@@ -100,11 +130,13 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 ## [3.2.0] - 2026-03-28
 
 ### Added
+
 - **`ccm launch [auto|yolo|plan|safe]`** — launch Claude Code with preset permission modes and terminal state reset on exit (fixes broken Ctrl-C/Ctrl-D in tmux/kitty/ghostty)
 - **`ccm init [--force]`** — auto-generate `.claudeignore` based on detected project type (Node, Python, Go, Rust, Java, Ruby, PHP, .NET, Dart, Swift)
 - **`ccm permissions audit [--fix]`** — scan settings.json for duplicate rules, contradictions, verbatim "Always Allow" junk, and rule count bloat
 
 ### Fixed
+
 - Atomic credential writes on Linux/WSL (temp file + mv) to prevent corruption on interrupted writes
 - Atomic config backup writes (same pattern)
 - Stale bindings now auto-removed when an account is deleted
@@ -116,6 +148,7 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 ## [3.1.0] - 2026-03-28
 
 ### Added
+
 - **`ccm clean tmp`** — clean orphaned subagent output files from `/tmp/claude-*/` (`--days N`, default 1)
 - **`ccm clean processes`** — detect and kill orphaned Claude subagent processes
 - **`ccm usage history`** — token usage analytics with per-project and per-day breakdowns (`--days N`, `--project <path>`)
@@ -126,6 +159,7 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 - **Enhanced `ccm doctor`** — 4 new health checks: total disk size, tmp output files, orphaned processes, hook async audit
 
 ### Changed
+
 - `ccm switch` (no args) now checks project bindings before cycling to next account
 - `ccm clean all` now includes tmp file cleanup and orphaned process detection
 - Schema version bumped to 3.1 (auto-migrates from 3.0, adds `bindings` field)
@@ -133,11 +167,13 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 ## [3.0.1] - 2026-03-25
 
 ### Fixed
+
 - `ccm session relocate` no longer hangs on large projects — uses `grep -qF` (fixed-string) instead of regex, adds per-file progress output
 
 ## [3.0.0] - 2026-03-25
 
 ### Added
+
 - **Renamed from `ccswitch` to `ccm`** — new hybrid CLI with subcommand pattern
 - **Session management** — `ccm session list`, `info`, `relocate`, `clean`
 - **Environment snapshots** — `ccm env snapshot`, `restore`, `list`, `delete`
@@ -156,6 +192,7 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 - **Path decoding heuristic** — filesystem-walking algorithm for accurate session path display
 
 ### Changed
+
 - CLI pattern: `--flag` style replaced with hybrid subcommands (`ccm switch` instead of `ccswitch --switch`)
 - Color initialization deferred to support `--no-color` from any argument position
 - Unicode symbols replaced with ASCII equivalents when `--no-color` is active
@@ -164,6 +201,7 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 - Interactive mode header updated with ASCII art logo
 
 ### Fixed
+
 - `--no-color` flag now works correctly (colors were previously `readonly` and couldn't be overridden)
 - Path decoding no longer splits hyphenated directory names into separate segments
 - `date -j` macOS-only calls replaced with cross-platform helper
@@ -172,6 +210,7 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 ## [2.0.0] - 2025-11-24
 
 ### Added
+
 - Account aliases (`--set-alias`)
 - Switch history tracking (last 10 entries)
 - Usage count per account
@@ -182,12 +221,14 @@ All notable changes to CCM (Claude Code Manager) will be documented in this file
 - Interactive mode (`--interactive`)
 
 ### Changed
+
 - Major code refactoring for readability and maintainability
 - Added comprehensive docstrings to all functions
 
 ## [1.0.0] - 2025-07-02
 
 ### Added
+
 - Initial release as `ccswitch`
 - Multi-account add/remove/switch
 - macOS Keychain and Linux file-based credential storage

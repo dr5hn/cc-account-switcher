@@ -6,12 +6,16 @@
 set -euo pipefail
 
 # Configuration
-readonly CCM_VERSION="4.2.0"
+readonly CCM_VERSION="4.3.0"
 readonly BACKUP_DIR="$HOME/.claude-switch-backup"
 readonly SEQUENCE_FILE="$BACKUP_DIR/sequence.json"
-readonly SCHEMA_VERSION="3.1"
+readonly SCHEMA_VERSION="4.0"
 readonly MAX_HISTORY_ENTRIES=10
 readonly CLAUDE_PROJECTS_DIR="$HOME/.claude/projects"
+readonly CLAUDE_SETTINGS_FILE="$HOME/.claude/settings.json"
+
+# VertexAI env var prefixes used for credential backup/restore
+readonly VERTEX_ENV_KEYS_PATTERN='^(CLAUDE_CODE_USE_VERTEX|ANTHROPIC_VERTEX_|CLOUD_ML_REGION|GOOGLE_APPLICATION_CREDENTIALS|ANTHROPIC_DEFAULT_|ANTHROPIC_MODEL|DISABLE_PROMPT_CACHING|ENABLE_PROMPT_CACHING_1H|ENABLE_TOOL_SEARCH|VERTEX_REGION_)'
 
 # Feature flags
 NO_COLOR=${NO_COLOR:-0}
@@ -138,6 +142,16 @@ validate_email() {
     fi
 }
 
+# GCP project ID validation
+# Purpose: Validates GCP project ID format (lowercase letters, digits, hyphens, 6-30 chars)
+# Parameters: $1 — project ID to validate
+# Returns: 0 if valid, 1 if invalid
+# Usage: validate_vertex_project_id "my-project"
+validate_vertex_project_id() {
+    local project_id="$1"
+    [[ "$project_id" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]
+}
+
 # Snapshot name validation function
 # Purpose: Validates that a snapshot name contains only safe characters
 # Parameters: $1 — snapshot name to validate
@@ -149,20 +163,22 @@ validate_snapshot_name() {
 }
 
 # Account parameter validation for safe file path construction
-# Purpose: Validates account_num is numeric and email is safe for use in file paths
-# Parameters: $1 — account number, $2 — email address
+# Purpose: Validates account_num is numeric and identifier (email or project ID) is safe for file paths
+# Parameters: $1 — account number, $2 — email address or project ID
 # Returns: 0 if valid, 1 if invalid (logs error on failure)
 # Usage: validate_account_params "1" "user@example.com" || return 1
 validate_account_params() {
     local account_num="$1"
-    local email="$2"
+    local identifier="$2"
     if [[ ! "$account_num" =~ ^[0-9]+$ ]]; then
         log_error "Invalid account number: contains non-numeric characters"
         return 1
     fi
-    if [[ -n "$email" ]] && ! validate_email "$email"; then
-        log_error "Invalid email format for account parameter"
-        return 1
+    if [[ -n "$identifier" ]]; then
+        if ! validate_email "$identifier" && ! validate_vertex_project_id "$identifier"; then
+            log_error "Invalid account identifier format (not a valid email or project ID)"
+            return 1
+        fi
     fi
     return 0
 }
@@ -198,6 +214,17 @@ resolve_account_identifier() {
             return 0
         elif [[ ${#matches[@]} -gt 1 ]]; then
             log_error "Alias '$identifier' matches multiple accounts. Reassign aliases to make them unique."
+            echo ""
+            return 1
+        fi
+
+        # Try to look up by VertexAI project ID
+        mapfile -t matches < <(jq -r --arg pid "$identifier" '.accounts | to_entries[] | select(.value.projectId == $pid) | .key' "$SEQUENCE_FILE" 2>/dev/null)
+        if [[ ${#matches[@]} -eq 1 ]] && [[ "${matches[0]}" =~ ^[0-9]+$ ]]; then
+            echo "${matches[0]}"
+            return 0
+        elif [[ ${#matches[@]} -gt 1 ]]; then
+            log_error "Project ID '$identifier' matches multiple accounts"
             echo ""
             return 1
         fi
@@ -278,18 +305,32 @@ wait_for_claude_close() {
     echo "Claude Code closed. Continuing..."
 }
 
-# Get current account info from .claude.json
+# Get current account identifier from .claude.json (OAuth) or settings.json (VertexAI)
 get_current_account() {
+    local account_type
+    account_type=$(get_current_account_type)
+
+    if [[ "$account_type" == "vertex" ]]; then
+        local settings_path="$CLAUDE_SETTINGS_FILE"
+        if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]] && [[ -f "$CLAUDE_CONFIG_DIR/settings.json" ]]; then
+            settings_path="$CLAUDE_CONFIG_DIR/settings.json"
+        fi
+        local project_id
+        project_id=$(jq -r '.env.ANTHROPIC_VERTEX_PROJECT_ID // empty' "$settings_path" 2>/dev/null)
+        echo "${project_id:-none}"
+        return
+    fi
+
     if [[ ! -f "$(get_claude_config_path)" ]]; then
         echo "none"
         return
     fi
-    
+
     if ! validate_json "$(get_claude_config_path)"; then
         echo "none"
         return
     fi
-    
+
     local email
     email=$(jq -r '.oauthAccount.emailAddress // empty' "$(get_claude_config_path)" 2>/dev/null)
     echo "${email:-none}"
@@ -417,6 +458,187 @@ write_account_config() {
     mv -- "$tmp" "$config_file"
 }
 
+# ─── VertexAI Account Helpers ────────────────────────────────────────────────
+
+# Purpose: Returns account type ("oauth" or "vertex") for a given account number
+# Parameters: $1 — account number
+# Returns: Prints "oauth" or "vertex"
+# Usage: local atype=$(get_account_type "1")
+get_account_type() {
+    local account_num="$1"
+    local atype
+    atype=$(jq -r --arg num "$account_num" '.accounts[$num].type // "oauth"' "$SEQUENCE_FILE" 2>/dev/null)
+    echo "${atype:-oauth}"
+}
+
+# Purpose: Returns display identifier for an account (email or vertex:projectId)
+# Parameters: $1 — account number
+# Returns: Prints display identifier string
+# Usage: local label=$(get_account_display_id "1")
+get_account_display_id() {
+    local account_num="$1"
+    local atype
+    atype=$(get_account_type "$account_num")
+    if [[ "$atype" == "vertex" ]]; then
+        local pid
+        pid=$(jq -r --arg num "$account_num" '.accounts[$num].projectId // "unknown"' "$SEQUENCE_FILE" 2>/dev/null)
+        echo "vertex:$pid"
+    else
+        jq -r --arg num "$account_num" '.accounts[$num].email // "unknown"' "$SEQUENCE_FILE" 2>/dev/null
+    fi
+}
+
+# Purpose: Detects whether current Claude Code session uses VertexAI or OAuth
+# Parameters: None
+# Returns: Prints "vertex" or "oauth"
+# Usage: local ctype=$(get_current_account_type)
+get_current_account_type() {
+    local settings_path="$CLAUDE_SETTINGS_FILE"
+    if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]] && [[ -f "$CLAUDE_CONFIG_DIR/settings.json" ]]; then
+        settings_path="$CLAUDE_CONFIG_DIR/settings.json"
+    fi
+    if [[ -f "$settings_path" ]]; then
+        local vertex_flag
+        vertex_flag=$(jq -r '.env.CLAUDE_CODE_USE_VERTEX // empty' "$settings_path" 2>/dev/null)
+        if [[ "$vertex_flag" == "1" ]]; then
+            echo "vertex"
+            return
+        fi
+    fi
+    echo "oauth"
+}
+
+# Purpose: Reads VertexAI env vars from settings.json env block
+# Parameters: $1 — settings.json path (optional, defaults to CLAUDE_SETTINGS_FILE)
+# Returns: Prints JSON object of matching env vars
+# Usage: local env_json=$(read_vertex_env)
+read_vertex_env() {
+    local settings_path="${1:-$CLAUDE_SETTINGS_FILE}"
+    if [[ ! -f "$settings_path" ]]; then
+        echo "{}"
+        return
+    fi
+    jq '(.env // {}) | with_entries(select(.key | test("'"$VERTEX_ENV_KEYS_PATTERN"'")))' "$settings_path" 2>/dev/null || echo "{}"
+}
+
+# Purpose: Merges VertexAI env vars into settings.json env block (permission-preserving)
+# Parameters: $1 — settings.json path, $2 — JSON object of env vars to merge
+# Returns: 0 on success, 1 on failure
+# Usage: write_vertex_env "$CLAUDE_SETTINGS_FILE" "$env_json"
+write_vertex_env() {
+    local settings_path="$1"
+    local env_json="$2"
+    local orig_perms="644"
+
+    if [[ -f "$settings_path" ]]; then
+        orig_perms=$(stat -f '%Lp' "$settings_path" 2>/dev/null || stat -c '%a' "$settings_path" 2>/dev/null || echo "644")
+        local updated
+        updated=$(jq --argjson venv "$env_json" '.env = ((.env // {}) * $venv)' "$settings_path")
+        echo "$updated" > "${settings_path}.tmp" && mv "${settings_path}.tmp" "$settings_path"
+        chmod "$orig_perms" "$settings_path"
+    else
+        mkdir -p "$(dirname "$settings_path")"
+        echo '{}' | jq --argjson venv "$env_json" '.env = $venv' > "$settings_path"
+    fi
+}
+
+# Purpose: Removes VertexAI env vars from settings.json env block (permission-preserving)
+# Parameters: $1 — settings.json path (optional, defaults to CLAUDE_SETTINGS_FILE)
+# Returns: 0 on success
+# Usage: clear_vertex_env "$CLAUDE_SETTINGS_FILE"
+clear_vertex_env() {
+    local settings_path="${1:-$CLAUDE_SETTINGS_FILE}"
+    if [[ ! -f "$settings_path" ]]; then
+        return 0
+    fi
+    local orig_perms
+    orig_perms=$(stat -f '%Lp' "$settings_path" 2>/dev/null || stat -c '%a' "$settings_path" 2>/dev/null || echo "644")
+    local updated
+    updated=$(jq '(.env // {}) |= with_entries(select(.key | test("'"$VERTEX_ENV_KEYS_PATTERN"'") | not))' "$settings_path")
+    echo "$updated" > "${settings_path}.tmp" && mv "${settings_path}.tmp" "$settings_path"
+    chmod "$orig_perms" "$settings_path"
+}
+
+# Purpose: Reads VertexAI credential backup (env vars JSON)
+# Parameters: $1 — account number, $2 — project ID
+# Returns: Prints JSON env vars or empty string
+# Usage: local env=$(read_vertex_credentials "1" "my-project")
+read_vertex_credentials() {
+    local account_num="$1"
+    local project_id="$2"
+    local cred_file="$BACKUP_DIR/credentials/.claude-vertex-env-${account_num}-${project_id}.json"
+    if [[ -f "$cred_file" ]]; then
+        cat "$cred_file"
+    else
+        echo ""
+    fi
+}
+
+# Purpose: Writes VertexAI credential backup (env vars JSON)
+# Parameters: $1 — account number, $2 — project ID, $3 — env vars JSON
+# Returns: 0 on success
+# Usage: write_vertex_credentials "1" "my-project" "$env_json"
+write_vertex_credentials() {
+    local account_num="$1"
+    local project_id="$2"
+    local env_json="$3"
+    local cred_file="$BACKUP_DIR/credentials/.claude-vertex-env-${account_num}-${project_id}.json"
+    local tmp old_umask
+    old_umask=$(umask)
+    umask 077
+    tmp=$(mktemp "${cred_file}.XXXXXX")
+    umask "$old_umask"
+    printf '%s' "$env_json" > "$tmp"
+    mv -- "$tmp" "$cred_file"
+}
+
+# Purpose: Reads VertexAI config backup
+# Parameters: $1 — account number, $2 — project ID
+# Returns: Prints config JSON or empty string
+# Usage: local cfg=$(read_vertex_config "1" "my-project")
+read_vertex_config() {
+    local account_num="$1"
+    local project_id="$2"
+    local config_file="$BACKUP_DIR/configs/.claude-config-${account_num}-vertex-${project_id}.json"
+    if [[ -f "$config_file" ]]; then
+        cat "$config_file"
+    else
+        echo ""
+    fi
+}
+
+# Purpose: Writes VertexAI config backup
+# Parameters: $1 — account number, $2 — project ID, $3 — config JSON
+# Returns: 0 on success
+# Usage: write_vertex_config "1" "my-project" "$config_json"
+write_vertex_config() {
+    local account_num="$1"
+    local project_id="$2"
+    local config="$3"
+    local config_file="$BACKUP_DIR/configs/.claude-config-${account_num}-vertex-${project_id}.json"
+    local tmp old_umask
+    old_umask=$(umask)
+    umask 077
+    tmp=$(mktemp "${config_file}.XXXXXX")
+    umask "$old_umask"
+    echo "$config" > "$tmp"
+    mv -- "$tmp" "$config_file"
+}
+
+# Purpose: Checks if a VertexAI account exists by project ID
+# Parameters: $1 — project ID
+# Returns: 0 if exists, 1 if not
+# Usage: if account_exists_by_project "my-project"; then ...; fi
+account_exists_by_project() {
+    local project_id="$1"
+    if [[ ! -f "$SEQUENCE_FILE" ]]; then
+        return 1
+    fi
+    jq -e --arg pid "$project_id" '.accounts[] | select(.projectId == $pid)' "$SEQUENCE_FILE" >/dev/null 2>&1
+}
+
+# ─── Cache Management ────────────────────────────────────────────────────────
+
 # Cache management functions
 # Purpose: Invalidates the in-memory cache of sequence data
 # Parameters: None
@@ -524,9 +746,22 @@ migrate_sequence_file() {
     # Migrate from 3.0 to 3.1 (add bindings)
     if [[ "$current_version" == "3.0" ]]; then
         local migrated
+        migrated=$(jq '
+            .schemaVersion = "3.1" |
+            .bindings = (.bindings // {})
+        ' "$SEQUENCE_FILE")
+
+        write_json "$SEQUENCE_FILE" "$migrated"
+        invalidate_cache
+        current_version="3.1"
+    fi
+
+    # Migrate from 3.1 to 4.0 (add account type field)
+    if [[ "$current_version" == "3.1" ]]; then
+        local migrated
         migrated=$(jq --arg version "$SCHEMA_VERSION" '
             .schemaVersion = $version |
-            .bindings = (.bindings // {})
+            .accounts |= with_entries(.value |= . + {type: (.type // "oauth")})
         ' "$SEQUENCE_FILE")
 
         write_json "$SEQUENCE_FILE" "$migrated"
@@ -549,14 +784,14 @@ get_next_account_number() {
     echo $((max_num + 1))
 }
 
-# Check if account exists by email
+# Check if account exists by email or project ID
 account_exists() {
-    local email="$1"
+    local identifier="$1"
     if [[ ! -f "$SEQUENCE_FILE" ]]; then
         return 1
     fi
-    
-    jq -e --arg email "$email" '.accounts[] | select(.email == $email)' "$SEQUENCE_FILE" >/dev/null 2>&1
+
+    jq -e --arg id "$identifier" '.accounts[] | select(.email == $id or .projectId == $id)' "$SEQUENCE_FILE" >/dev/null 2>&1
 }
 
 # ─── Session Utility Functions ────────────────────────────────────────────────
@@ -1305,6 +1540,20 @@ cmd_add_account() {
     init_sequence_file
     migrate_sequence_file
 
+    local account_type
+    account_type=$(get_current_account_type)
+
+    if [[ "$account_type" == "vertex" ]]; then
+        _add_vertex_account
+    else
+        _add_oauth_account
+    fi
+}
+
+# Purpose: Adds current OAuth account to managed accounts
+# Parameters: None
+# Returns: Exit code 0 on success, 1 on failure
+_add_oauth_account() {
     show_progress "Checking current account"
     local current_email
     current_email=$(get_current_account)
@@ -1324,7 +1573,6 @@ cmd_add_account() {
     account_num=$(get_next_account_number)
 
     show_progress "Reading credentials and configuration"
-    # Backup current credentials and config
     local current_creds current_config
     current_creds=$(read_credentials)
     current_config=$(cat "$(get_claude_config_path)")
@@ -1335,21 +1583,19 @@ cmd_add_account() {
         exit 1
     fi
 
-    # Get account UUID
     local account_uuid
     account_uuid=$(jq -r '.oauthAccount.accountUuid' "$(get_claude_config_path)")
 
     show_progress "Storing account backups"
-    # Store backups
     write_account_credentials "$account_num" "$current_email" "$current_creds"
     write_account_config "$account_num" "$current_email" "$current_config"
     complete_progress
 
     show_progress "Updating account registry"
-    # Update sequence.json with new metadata fields
     local updated_sequence
     updated_sequence=$(jq --arg num "$account_num" --arg email "$current_email" --arg uuid "$account_uuid" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
         .accounts[$num] = {
+            type: "oauth",
             email: $email,
             uuid: $uuid,
             added: $now,
@@ -1368,6 +1614,76 @@ cmd_add_account() {
     complete_progress
 
     log_success "Added Account $account_num: $current_email"
+}
+
+# Purpose: Adds current VertexAI account to managed accounts
+# Parameters: None
+# Returns: Exit code 0 on success, 1 on failure
+_add_vertex_account() {
+    show_progress "Checking VertexAI configuration"
+    local settings_path="$CLAUDE_SETTINGS_FILE"
+    if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]] && [[ -f "$CLAUDE_CONFIG_DIR/settings.json" ]]; then
+        settings_path="$CLAUDE_CONFIG_DIR/settings.json"
+    fi
+
+    local project_id region
+    project_id=$(jq -r '.env.ANTHROPIC_VERTEX_PROJECT_ID // empty' "$settings_path" 2>/dev/null)
+    region=$(jq -r '.env.CLOUD_ML_REGION // "global"' "$settings_path" 2>/dev/null)
+    complete_progress
+
+    if [[ -z "$project_id" ]]; then
+        log_error "No ANTHROPIC_VERTEX_PROJECT_ID found in settings.json. Configure VertexAI first."
+        exit 1
+    fi
+
+    if account_exists_by_project "$project_id"; then
+        log_info "VertexAI account vertex:$project_id is already managed."
+        exit 0
+    fi
+
+    local account_num
+    account_num=$(get_next_account_number)
+
+    show_progress "Reading VertexAI configuration"
+    local vertex_env
+    vertex_env=$(read_vertex_env "$settings_path")
+    local settings_config
+    settings_config=$(cat "$settings_path")
+    complete_progress
+
+    if [[ -z "$vertex_env" || "$vertex_env" == "{}" ]]; then
+        log_error "No VertexAI env vars found in settings.json"
+        exit 1
+    fi
+
+    show_progress "Storing account backups"
+    write_vertex_credentials "$account_num" "$project_id" "$vertex_env"
+    write_vertex_config "$account_num" "$project_id" "$settings_config"
+    complete_progress
+
+    show_progress "Updating account registry"
+    local updated_sequence
+    updated_sequence=$(jq --arg num "$account_num" --arg pid "$project_id" --arg region "$region" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+        .accounts[$num] = {
+            type: "vertex",
+            projectId: $pid,
+            region: $region,
+            added: $now,
+            alias: null,
+            lastUsed: $now,
+            usageCount: 1,
+            healthStatus: "healthy"
+        } |
+        .sequence += [$num | tonumber] |
+        .activeAccountNumber = ($num | tonumber) |
+        .lastUpdated = $now
+    ' "$SEQUENCE_FILE")
+
+    write_json "$SEQUENCE_FILE" "$updated_sequence"
+    invalidate_cache
+    complete_progress
+
+    log_success "Added Account $account_num: vertex:$project_id (region: $region)"
 }
 
 # Remove account
@@ -1402,17 +1718,19 @@ cmd_remove_account() {
         exit 1
     fi
 
-    local email
-    email=$(echo "$account_info" | jq -r '.email')
+    local atype
+    atype=$(echo "$account_info" | jq -r '.type // "oauth"')
+    local display_label
+    display_label=$(get_account_display_id "$account_num")
 
     local active_account
     active_account=$(jq -r '.activeAccountNumber' "$SEQUENCE_FILE")
 
     if [[ "$active_account" == "$account_num" ]]; then
-        log_warning "Account-$account_num ($email) is currently active"
+        log_warning "Account-$account_num ($display_label) is currently active"
     fi
 
-    echo -e -n "${COLOR_YELLOW}Are you sure you want to permanently remove Account-$account_num ($email)?${COLOR_RESET} [y/N] "
+    echo -e -n "${COLOR_YELLOW}Are you sure you want to permanently remove Account-$account_num ($display_label)?${COLOR_RESET} [y/N] "
     read -r confirm
 
     if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
@@ -1421,22 +1739,33 @@ cmd_remove_account() {
     fi
 
     show_progress "Removing backup files"
-    # Remove backup files
-    local platform
-    platform=$(detect_platform)
-    case "$platform" in
-        macos)
-            security delete-generic-password -s "Claude Code-Account-${account_num}-${email}" 2>/dev/null || true
-            ;;
-        linux|wsl)
-            rm -f "$BACKUP_DIR/credentials/.claude-credentials-${account_num}-${email}.json"
-            ;;
-    esac
-    rm -f "$BACKUP_DIR/configs/.claude-config-${account_num}-${email}.json"
+    if [[ "$atype" == "vertex" ]]; then
+        local project_id
+        project_id=$(echo "$account_info" | jq -r '.projectId')
+        rm -f "$BACKUP_DIR/credentials/.claude-vertex-env-${account_num}-${project_id}.json"
+        rm -f "$BACKUP_DIR/configs/.claude-config-${account_num}-vertex-${project_id}.json"
+        # If removing active VertexAI account, clear env vars from settings.json
+        if [[ "$active_account" == "$account_num" ]]; then
+            clear_vertex_env "$CLAUDE_SETTINGS_FILE"
+        fi
+    else
+        local email
+        email=$(echo "$account_info" | jq -r '.email')
+        local platform
+        platform=$(detect_platform)
+        case "$platform" in
+            macos)
+                security delete-generic-password -s "Claude Code-Account-${account_num}-${email}" 2>/dev/null || true
+                ;;
+            linux|wsl)
+                rm -f "$BACKUP_DIR/credentials/.claude-credentials-${account_num}-${email}.json"
+                ;;
+        esac
+        rm -f "$BACKUP_DIR/configs/.claude-config-${account_num}-${email}.json"
+    fi
     complete_progress
 
     show_progress "Updating account registry"
-    # Update sequence.json
     local updated_sequence
     updated_sequence=$(jq --arg num "$account_num" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
         del(.accounts[$num]) |
@@ -1450,20 +1779,27 @@ cmd_remove_account() {
     invalidate_cache
     complete_progress
 
-    log_success "Account-$account_num ($email) has been removed"
+    log_success "Account-$account_num ($display_label) has been removed"
 }
 
 # First-run setup workflow
 first_run_setup() {
-    local current_email
-    current_email=$(get_current_account)
-    
-    if [[ "$current_email" == "none" ]]; then
+    local current_id current_type display_label
+    current_id=$(get_current_account)
+    current_type=$(get_current_account_type)
+
+    if [[ "$current_id" == "none" ]]; then
         echo "No active Claude account found. Please log in first."
         return 1
     fi
-    
-    echo -n "No managed accounts found. Add current account ($current_email) to managed list? [Y/n] "
+
+    if [[ "$current_type" == "vertex" ]]; then
+        display_label="vertex:$current_id"
+    else
+        display_label="$current_id"
+    fi
+
+    echo -n "No managed accounts found. Add current account ($display_label) to managed list? [Y/n] "
     read -r response
     
     if [[ "$response" == "n" || "$response" == "N" ]]; then
@@ -1485,43 +1821,53 @@ cmd_list() {
 
     migrate_sequence_file
 
-    # Get current active account from .claude.json
-    local current_email
-    current_email=$(get_current_account)
+    # Get current active account identifier
+    local current_id
+    current_id=$(get_current_account)
+    local current_type
+    current_type=$(get_current_account_type)
 
-    # Find which account number corresponds to the current email
+    # Find which account number corresponds to the current identity
     local active_account_num=""
-    if [[ "$current_email" != "none" ]]; then
-        active_account_num=$(jq -r --arg email "$current_email" '.accounts | to_entries[] | select(.value.email == $email) | .key' "$SEQUENCE_FILE" 2>/dev/null)
+    if [[ "$current_id" != "none" ]]; then
+        if [[ "$current_type" == "vertex" ]]; then
+            active_account_num=$(jq -r --arg pid "$current_id" '.accounts | to_entries[] | select(.value.projectId == $pid) | .key' "$SEQUENCE_FILE" 2>/dev/null)
+        else
+            active_account_num=$(jq -r --arg email "$current_id" '.accounts | to_entries[] | select(.value.email == $email) | .key' "$SEQUENCE_FILE" 2>/dev/null)
+        fi
     fi
 
     echo -e "${COLOR_BOLD}Accounts:${COLOR_RESET}"
 
     # Read each account and format with colors
     while IFS= read -r line; do
-        local num email alias last_used usage_count health is_active
+        local num atype email project_id alias_name last_used usage_count health is_active display_id
         num=$(echo "$line" | jq -r '.num')
-        email=$(echo "$line" | jq -r '.email')
-        alias=$(echo "$line" | jq -r '.alias // empty')
+        atype=$(echo "$line" | jq -r '.type // "oauth"')
+        email=$(echo "$line" | jq -r '.email // empty')
+        project_id=$(echo "$line" | jq -r '.projectId // empty')
+        alias_name=$(echo "$line" | jq -r '.alias // empty')
         last_used=$(echo "$line" | jq -r '.lastUsed // empty')
         usage_count=$(echo "$line" | jq -r '.usageCount // 0')
         health=$(echo "$line" | jq -r '.healthStatus // "unknown"')
         is_active=$(echo "$line" | jq -r '.isActive')
 
-        # Format account line
-        local account_line="  $num: $email"
-
-        # Add alias if present
-        if [[ -n "$alias" ]]; then
-            account_line+=" ${COLOR_CYAN}[$alias]${COLOR_RESET}"
+        if [[ "$atype" == "vertex" ]]; then
+            display_id="vertex:$project_id"
+        else
+            display_id="$email"
         fi
 
-        # Add active indicator
+        local account_line="  $num: $display_id"
+
+        if [[ -n "$alias_name" ]]; then
+            account_line+=" ${COLOR_CYAN}[$alias_name]${COLOR_RESET}"
+        fi
+
         if [[ "$is_active" == "true" ]]; then
             account_line+=" ${COLOR_GREEN}(active)${COLOR_RESET}"
         fi
 
-        # Add metadata on next line
         local metadata=""
         if [[ -n "$last_used" && "$last_used" != "null" ]]; then
             local last_used_formatted
@@ -1533,7 +1879,6 @@ cmd_list() {
             metadata+=" | Used: ${usage_count}x"
         fi
 
-        # Health indicator
         case "$health" in
             healthy)
                 metadata+=" | ${COLOR_GREEN}●${COLOR_RESET} healthy"
@@ -1568,8 +1913,6 @@ cmd_list() {
             [[ -z "$path" ]] && continue
             local display_path
             display_path=$(truncate_path "$path")
-            local email
-            email=$(jq -r --arg n "$account_num" '.accounts[$n].email // "unknown"' "$SEQUENCE_FILE")
             local alias_name
             alias_name=$(jq -r --arg n "$account_num" '.accounts[$n].alias // empty' "$SEQUENCE_FILE")
             local label="$account_num"
@@ -1617,14 +1960,14 @@ cmd_switch() {
         local active_account
         active_account=$(jq -r '.activeAccountNumber' "$SEQUENCE_FILE")
         if [[ "$active_account" == "$bound_account" ]]; then
-            local bound_email
-            bound_email=$(jq -r --arg n "$bound_account" '.accounts[$n].email // "unknown"' "$SEQUENCE_FILE")
-            log_info "Already on bound account $bound_account ($bound_email) for this project."
+            local bound_label
+            bound_label=$(get_account_display_id "$bound_account")
+            log_info "Already on bound account $bound_account ($bound_label) for this project."
             return 0
         fi
-        local bound_email
-        bound_email=$(jq -r --arg n "$bound_account" '.accounts[$n].email // "unknown"' "$SEQUENCE_FILE")
-        log_info "Project binding: switching to Account-$bound_account ($bound_email)"
+        local bound_label
+        bound_label=$(get_account_display_id "$bound_account")
+        log_info "Project binding: switching to Account-$bound_account ($bound_label)"
         perform_switch "$bound_account"
         return $?
     fi
@@ -1716,69 +2059,27 @@ perform_switch() {
     local target_account="$1"
 
     show_progress "Validating target account"
-    # Get current and target account info
-    local current_account target_email current_email
+    local current_account current_type target_type
     current_account=$(jq -r '.activeAccountNumber' "$SEQUENCE_FILE")
-    target_email=$(jq -r --arg num "$target_account" '.accounts[$num].email' "$SEQUENCE_FILE")
-    current_email=$(get_current_account)
+    current_type=$(get_account_type "$current_account")
+    target_type=$(get_account_type "$target_account")
+    local target_display
+    target_display=$(get_account_display_id "$target_account")
     complete_progress
 
-    show_progress "Backing up current account"
-    # Step 1: Backup current account (parallel safe operations)
-    local current_creds current_config
-    current_creds=$(read_credentials)
-    current_config=$(cat "$(get_claude_config_path)")
-
-    write_account_credentials "$current_account" "$current_email" "$current_creds"
-    write_account_config "$current_account" "$current_email" "$current_config"
-    complete_progress
-
-    show_progress "Retrieving target account data"
-    # Step 2: Retrieve target account
-    local target_creds target_config
-    target_creds=$(read_account_credentials "$target_account" "$target_email")
-    target_config=$(read_account_config "$target_account" "$target_email")
-
-    if [[ -z "$target_creds" || -z "$target_config" ]]; then
-        log_error "Missing backup data for Account-$target_account"
-        exit 1
-    fi
-    complete_progress
-
-    show_progress "Validating backup data"
-    # Validate before switching
-    if ! echo "$target_config" | jq -e '.oauthAccount' >/dev/null 2>&1; then
-        log_error "Invalid oauthAccount in backup"
-        exit 1
-    fi
-    complete_progress
-
-    show_progress "Activating target account"
-    # Step 3: Activate target account
-    write_credentials "$target_creds"
-
-    # Extract oauthAccount from backup and validate
-    local oauth_section
-    oauth_section=$(echo "$target_config" | jq '.oauthAccount' 2>/dev/null)
-    if [[ -z "$oauth_section" || "$oauth_section" == "null" ]]; then
-        log_error "Invalid oauthAccount in backup"
-        exit 1
+    # Dispatch based on source and target account types
+    if [[ "$current_type" == "oauth" && "$target_type" == "oauth" ]]; then
+        _switch_oauth_to_oauth "$current_account" "$target_account"
+    elif [[ "$current_type" == "oauth" && "$target_type" == "vertex" ]]; then
+        _switch_oauth_to_vertex "$current_account" "$target_account"
+    elif [[ "$current_type" == "vertex" && "$target_type" == "oauth" ]]; then
+        _switch_vertex_to_oauth "$current_account" "$target_account"
+    elif [[ "$current_type" == "vertex" && "$target_type" == "vertex" ]]; then
+        _switch_vertex_to_vertex "$current_account" "$target_account"
     fi
 
-    # Merge with current config and validate
-    local merged_config
-    merged_config=$(jq --argjson oauth "$oauth_section" '.oauthAccount = $oauth' "$(get_claude_config_path)" 2>/dev/null)
-    if [[ $? -ne 0 ]]; then
-        log_error "Failed to merge config"
-        exit 1
-    fi
-
-    # Use existing safe write_json function
-    write_json "$(get_claude_config_path)" "$merged_config"
-    complete_progress
-
+    # Update metadata (type-independent)
     show_progress "Updating account metadata"
-    # Step 4: Update state with history and metadata
     local now
     now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -1790,7 +2091,6 @@ perform_switch() {
         .accounts[$num].usageCount = ((.accounts[$num].usageCount // 0) + 1)
     ' "$SEQUENCE_FILE")
 
-    # Add history entry
     updated_sequence=$(echo "$updated_sequence" | jq --arg from "$current_account" --arg to "$target_account" --arg ts "$now" --argjson max "$MAX_HISTORY_ENTRIES" '
         .history += [{
             from: ($from | tonumber),
@@ -1804,13 +2104,191 @@ perform_switch() {
     invalidate_cache
     complete_progress
 
-    log_success "Switched to Account-$target_account ($target_email)"
+    log_success "Switched to Account-$target_account ($target_display)"
     echo ""
-    # Display updated account list
     cmd_list
     echo ""
     log_info "Please restart Claude Code to use the new authentication."
     echo ""
+}
+
+# Purpose: Switch from OAuth account to another OAuth account
+# Parameters: $1 — current account number, $2 — target account number
+_switch_oauth_to_oauth() {
+    local current_account="$1" target_account="$2"
+    local current_email target_email
+    current_email=$(get_current_account)
+    target_email=$(jq -r --arg num "$target_account" '.accounts[$num].email' "$SEQUENCE_FILE")
+
+    show_progress "Backing up current OAuth account"
+    local current_creds current_config
+    current_creds=$(read_credentials)
+    current_config=$(cat "$(get_claude_config_path)")
+    write_account_credentials "$current_account" "$current_email" "$current_creds"
+    write_account_config "$current_account" "$current_email" "$current_config"
+    complete_progress
+
+    show_progress "Retrieving target OAuth account"
+    local target_creds target_config
+    target_creds=$(read_account_credentials "$target_account" "$target_email")
+    target_config=$(read_account_config "$target_account" "$target_email")
+    if [[ -z "$target_creds" || -z "$target_config" ]]; then
+        log_error "Missing backup data for Account-$target_account"
+        exit 1
+    fi
+    complete_progress
+
+    show_progress "Validating backup data"
+    if ! echo "$target_config" | jq -e '.oauthAccount' >/dev/null 2>&1; then
+        log_error "Invalid oauthAccount in backup"
+        exit 1
+    fi
+    complete_progress
+
+    show_progress "Activating target OAuth account"
+    write_credentials "$target_creds"
+    local oauth_section
+    oauth_section=$(echo "$target_config" | jq '.oauthAccount' 2>/dev/null)
+    if [[ -z "$oauth_section" || "$oauth_section" == "null" ]]; then
+        log_error "Invalid oauthAccount in backup"
+        exit 1
+    fi
+    local merged_config
+    merged_config=$(jq --argjson oauth "$oauth_section" '.oauthAccount = $oauth' "$(get_claude_config_path)" 2>/dev/null)
+    if [[ $? -ne 0 ]]; then
+        log_error "Failed to merge config"
+        exit 1
+    fi
+    write_json "$(get_claude_config_path)" "$merged_config"
+    complete_progress
+}
+
+# Purpose: Switch from OAuth account to VertexAI account (clean switch)
+# Parameters: $1 — current account number, $2 — target account number
+_switch_oauth_to_vertex() {
+    local current_account="$1" target_account="$2"
+    local current_email target_pid
+    current_email=$(get_current_account)
+    target_pid=$(jq -r --arg num "$target_account" '.accounts[$num].projectId' "$SEQUENCE_FILE")
+
+    show_progress "Backing up current OAuth account"
+    local current_creds current_config
+    current_creds=$(read_credentials)
+    current_config=$(cat "$(get_claude_config_path)")
+    write_account_credentials "$current_account" "$current_email" "$current_creds"
+    write_account_config "$current_account" "$current_email" "$current_config"
+    complete_progress
+
+    show_progress "Retrieving target VertexAI account"
+    local target_env
+    target_env=$(read_vertex_credentials "$target_account" "$target_pid")
+    if [[ -z "$target_env" ]]; then
+        log_error "Missing VertexAI env backup for Account-$target_account"
+        exit 1
+    fi
+    complete_progress
+
+    show_progress "Activating VertexAI account (clean switch)"
+    write_vertex_env "$CLAUDE_SETTINGS_FILE" "$target_env"
+    # Clean switch: remove OAuth identity from .claude.json
+    if [[ -f "$(get_claude_config_path)" ]]; then
+        local cleaned_config
+        cleaned_config=$(jq 'del(.oauthAccount)' "$(get_claude_config_path)" 2>/dev/null)
+        if [[ -n "$cleaned_config" ]]; then
+            write_json "$(get_claude_config_path)" "$cleaned_config"
+        fi
+    fi
+    # Clear platform credential storage
+    local platform
+    platform=$(detect_platform)
+    case "$platform" in
+        macos) security delete-generic-password -s "Claude Code-credentials" 2>/dev/null || true ;;
+        linux|wsl) rm -f "$HOME/.claude/.credentials.json" ;;
+    esac
+    complete_progress
+}
+
+# Purpose: Switch from VertexAI account to OAuth account (clean switch)
+# Parameters: $1 — current account number, $2 — target account number
+_switch_vertex_to_oauth() {
+    local current_account="$1" target_account="$2"
+    local current_pid target_email
+    current_pid=$(jq -r --arg num "$current_account" '.accounts[$num].projectId' "$SEQUENCE_FILE")
+    target_email=$(jq -r --arg num "$target_account" '.accounts[$num].email' "$SEQUENCE_FILE")
+
+    show_progress "Backing up current VertexAI account"
+    local current_env
+    current_env=$(read_vertex_env)
+    write_vertex_credentials "$current_account" "$current_pid" "$current_env"
+    if [[ -f "$CLAUDE_SETTINGS_FILE" ]]; then
+        write_vertex_config "$current_account" "$current_pid" "$(cat "$CLAUDE_SETTINGS_FILE")"
+    fi
+    complete_progress
+
+    show_progress "Retrieving target OAuth account"
+    local target_creds target_config
+    target_creds=$(read_account_credentials "$target_account" "$target_email")
+    target_config=$(read_account_config "$target_account" "$target_email")
+    if [[ -z "$target_creds" || -z "$target_config" ]]; then
+        log_error "Missing backup data for Account-$target_account"
+        exit 1
+    fi
+    complete_progress
+
+    show_progress "Activating OAuth account (clean switch)"
+    # Clean switch: remove VertexAI env vars
+    clear_vertex_env "$CLAUDE_SETTINGS_FILE"
+    # Restore OAuth credentials
+    write_credentials "$target_creds"
+    local oauth_section
+    oauth_section=$(echo "$target_config" | jq '.oauthAccount' 2>/dev/null)
+    if [[ -z "$oauth_section" || "$oauth_section" == "null" ]]; then
+        log_error "Invalid oauthAccount in backup"
+        exit 1
+    fi
+    local config_path
+    config_path=$(get_claude_config_path)
+    if [[ -f "$config_path" ]]; then
+        local merged_config
+        merged_config=$(jq --argjson oauth "$oauth_section" '.oauthAccount = $oauth' "$config_path" 2>/dev/null)
+        write_json "$config_path" "$merged_config"
+    else
+        write_json "$config_path" "{\"oauthAccount\": $oauth_section}"
+    fi
+    complete_progress
+}
+
+# Purpose: Switch from VertexAI account to another VertexAI account
+# Parameters: $1 — current account number, $2 — target account number
+_switch_vertex_to_vertex() {
+    local current_account="$1" target_account="$2"
+    local current_pid target_pid
+    current_pid=$(jq -r --arg num "$current_account" '.accounts[$num].projectId' "$SEQUENCE_FILE")
+    target_pid=$(jq -r --arg num "$target_account" '.accounts[$num].projectId' "$SEQUENCE_FILE")
+
+    show_progress "Backing up current VertexAI account"
+    local current_env
+    current_env=$(read_vertex_env)
+    write_vertex_credentials "$current_account" "$current_pid" "$current_env"
+    if [[ -f "$CLAUDE_SETTINGS_FILE" ]]; then
+        write_vertex_config "$current_account" "$current_pid" "$(cat "$CLAUDE_SETTINGS_FILE")"
+    fi
+    complete_progress
+
+    show_progress "Retrieving target VertexAI account"
+    local target_env
+    target_env=$(read_vertex_credentials "$target_account" "$target_pid")
+    if [[ -z "$target_env" ]]; then
+        log_error "Missing VertexAI env backup for Account-$target_account"
+        exit 1
+    fi
+    complete_progress
+
+    show_progress "Activating target VertexAI account"
+    # Clear current VertexAI env vars, then write target's
+    clear_vertex_env "$CLAUDE_SETTINGS_FILE"
+    write_vertex_env "$CLAUDE_SETTINGS_FILE" "$target_env"
+    complete_progress
 }
 
 # Set account alias
@@ -1867,9 +2345,9 @@ cmd_set_alias() {
         | .key
     ' "$SEQUENCE_FILE" 2>/dev/null)
     if [[ -n "$existing_alias_num" && "$existing_alias_num" != "null" ]]; then
-        local existing_alias_email
-        existing_alias_email=$(jq -r --arg num "$existing_alias_num" '.accounts[$num].email // "unknown"' "$SEQUENCE_FILE")
-        log_error "Alias '$alias' is already used by Account-$existing_alias_num ($existing_alias_email)"
+        local existing_label
+        existing_label=$(get_account_display_id "$existing_alias_num")
+        log_error "Alias '$alias' is already used by Account-$existing_alias_num ($existing_label)"
         exit 1
     fi
 
@@ -1884,9 +2362,9 @@ cmd_set_alias() {
     invalidate_cache
     complete_progress
 
-    local email
-    email=$(echo "$account_info" | jq -r '.email')
-    log_success "Set alias '$alias' for Account-$account_num ($email)"
+    local display_label
+    display_label=$(get_account_display_id "$account_num")
+    log_success "Set alias '$alias' for Account-$account_num ($display_label)"
 }
 
 # Verify account backups
@@ -1928,28 +2406,65 @@ cmd_verify() {
     local all_healthy=1
 
     for account_num in "${accounts_to_check[@]}"; do
-        local email health_status="healthy"
-        email=$(jq -r --arg num "$account_num" '.accounts[$num].email' "$SEQUENCE_FILE")
+        local atype health_status="healthy"
+        atype=$(get_account_type "$account_num")
+        local display_label
+        display_label=$(get_account_display_id "$account_num")
 
-        # Check if credentials exist
-        local creds config
-        creds=$(read_account_credentials "$account_num" "$email")
-        config=$(read_account_config "$account_num" "$email")
+        if [[ "$atype" == "vertex" ]]; then
+            # VertexAI account verification
+            local project_id
+            project_id=$(jq -r --arg num "$account_num" '.accounts[$num].projectId // "unknown"' "$SEQUENCE_FILE")
+            local vertex_env
+            vertex_env=$(read_vertex_credentials "$account_num" "$project_id")
 
-        if [[ -z "$creds" ]]; then
-            health_status="unhealthy"
-            all_healthy=0
-            echo -e "  ${COLOR_RED}✗${COLOR_RESET} Account-$account_num ($email): Missing credentials"
-        elif [[ -z "$config" ]]; then
-            health_status="unhealthy"
-            all_healthy=0
-            echo -e "  ${COLOR_RED}✗${COLOR_RESET} Account-$account_num ($email): Missing configuration"
-        elif ! echo "$config" | jq -e '.oauthAccount' >/dev/null 2>&1; then
-            health_status="degraded"
-            all_healthy=0
-            echo -e "  ${COLOR_YELLOW}⚠${COLOR_RESET} Account-$account_num ($email): Invalid configuration format"
+            if [[ -z "$vertex_env" ]]; then
+                health_status="unhealthy"
+                all_healthy=0
+                echo -e "  ${COLOR_RED}✗${COLOR_RESET} Account-$account_num ($display_label): Missing VertexAI env backup"
+            elif ! echo "$vertex_env" | jq -e '.CLAUDE_CODE_USE_VERTEX' >/dev/null 2>&1; then
+                health_status="degraded"
+                all_healthy=0
+                echo -e "  ${COLOR_YELLOW}⚠${COLOR_RESET} Account-$account_num ($display_label): Missing CLAUDE_CODE_USE_VERTEX in backup"
+            elif ! echo "$vertex_env" | jq -e '.ANTHROPIC_VERTEX_PROJECT_ID' >/dev/null 2>&1; then
+                health_status="degraded"
+                all_healthy=0
+                echo -e "  ${COLOR_YELLOW}⚠${COLOR_RESET} Account-$account_num ($display_label): Missing project ID in backup"
+            else
+                # Check service account file if configured
+                local sa_path
+                sa_path=$(echo "$vertex_env" | jq -r '.GOOGLE_APPLICATION_CREDENTIALS // empty')
+                if [[ -n "$sa_path" && ! -f "$sa_path" ]]; then
+                    health_status="degraded"
+                    all_healthy=0
+                    echo -e "  ${COLOR_YELLOW}⚠${COLOR_RESET} Account-$account_num ($display_label): Service account file not found: $sa_path"
+                else
+                    echo -e "  ${COLOR_GREEN}✓${COLOR_RESET} Account-$account_num ($display_label): Healthy"
+                fi
+            fi
         else
-            echo -e "  ${COLOR_GREEN}✓${COLOR_RESET} Account-$account_num ($email): Healthy"
+            # OAuth account verification
+            local email
+            email=$(jq -r --arg num "$account_num" '.accounts[$num].email' "$SEQUENCE_FILE")
+            local creds config
+            creds=$(read_account_credentials "$account_num" "$email")
+            config=$(read_account_config "$account_num" "$email")
+
+            if [[ -z "$creds" ]]; then
+                health_status="unhealthy"
+                all_healthy=0
+                echo -e "  ${COLOR_RED}✗${COLOR_RESET} Account-$account_num ($display_label): Missing credentials"
+            elif [[ -z "$config" ]]; then
+                health_status="unhealthy"
+                all_healthy=0
+                echo -e "  ${COLOR_RED}✗${COLOR_RESET} Account-$account_num ($display_label): Missing configuration"
+            elif ! echo "$config" | jq -e '.oauthAccount' >/dev/null 2>&1; then
+                health_status="degraded"
+                all_healthy=0
+                echo -e "  ${COLOR_YELLOW}⚠${COLOR_RESET} Account-$account_num ($display_label): Invalid configuration format"
+            else
+                echo -e "  ${COLOR_GREEN}✓${COLOR_RESET} Account-$account_num ($display_label): Healthy"
+            fi
         fi
 
         # Update health status
@@ -1975,31 +2490,40 @@ cmd_verify() {
 # Show account status
 # Purpose: Returns short account label for statusline integration (no colors, single line)
 # Parameters: None
-# Returns: Account alias or email on stdout
+# Returns: Account alias, email, or vertex:projectId on stdout
 # Usage: get_active_account_label
 get_active_account_label() {
     if [[ ! -f "$SEQUENCE_FILE" ]]; then
         echo "no accounts"
         return 0
     fi
-    local email
-    email=$(get_current_account)
-    if [[ "$email" == "none" ]]; then
+    local current_id current_type
+    current_id=$(get_current_account)
+    current_type=$(get_current_account_type)
+    if [[ "$current_id" == "none" ]]; then
         echo "no account"
         return 0
     fi
     local account_num
-    account_num=$(jq -r --arg email "$email" '.accounts | to_entries[] | select(.value.email == $email) | .key' "$SEQUENCE_FILE" 2>/dev/null)
+    if [[ "$current_type" == "vertex" ]]; then
+        account_num=$(jq -r --arg pid "$current_id" '.accounts | to_entries[] | select(.value.projectId == $pid) | .key' "$SEQUENCE_FILE" 2>/dev/null)
+    else
+        account_num=$(jq -r --arg email "$current_id" '.accounts | to_entries[] | select(.value.email == $email) | .key' "$SEQUENCE_FILE" 2>/dev/null)
+    fi
     if [[ -n "$account_num" ]]; then
         local alias_name
         alias_name=$(jq -r --arg n "$account_num" '.accounts[$n].alias // empty' "$SEQUENCE_FILE" 2>/dev/null)
         if [[ -n "$alias_name" ]]; then
             echo "$alias_name"
         else
-            echo "$email"
+            echo "$(get_account_display_id "$account_num")"
         fi
     else
-        echo "$email"
+        if [[ "$current_type" == "vertex" ]]; then
+            echo "vertex:$current_id"
+        else
+            echo "$current_id"
+        fi
     fi
 }
 
@@ -2030,14 +2554,14 @@ cmd_history() {
         to_num=$(echo "$entry" | jq -r '.to')
         timestamp=$(echo "$entry" | jq -r '.timestamp')
 
-        local from_email to_email
-        from_email=$(jq -r --arg num "$from_num" '.accounts["\($num)"].email // "Unknown"' "$SEQUENCE_FILE")
-        to_email=$(jq -r --arg num "$to_num" '.accounts["\($num)"].email // "Unknown"' "$SEQUENCE_FILE")
+        local from_label to_label
+        from_label=$(get_account_display_id "$from_num")
+        to_label=$(get_account_display_id "$to_num")
 
         local time_formatted
         time_formatted=$(format_iso_date "$timestamp")
 
-        echo -e "  ${COLOR_CYAN}→${COLOR_RESET} $time_formatted: Account-$from_num ($from_email) → Account-$to_num ($to_email)"
+        echo -e "  ${COLOR_CYAN}→${COLOR_RESET} $time_formatted: Account-$from_num ($from_label) → Account-$to_num ($to_label)"
     done
 }
 
@@ -2133,11 +2657,11 @@ cmd_reorder() {
     # Show current state
     echo "Before:"
     while IFS= read -r num; do
-        local email alias_name
-        email=$(jq -r --arg n "$num" '.accounts[$n].email' "$SEQUENCE_FILE")
+        local display_id alias_name
+        display_id=$(get_account_display_id "$num")
         alias_name=$(jq -r --arg n "$num" '.accounts[$n].alias // empty' "$SEQUENCE_FILE")
-        local label="$email"
-        [[ -n "$alias_name" ]] && label="$email [$alias_name]"
+        local label="$display_id"
+        [[ -n "$alias_name" ]] && label="$display_id [$alias_name]"
         echo "  $num: $label"
     done <<< "$account_nums"
     echo ""
@@ -2178,11 +2702,18 @@ cmd_reorder() {
 
     # Build the mapping JSON first — validate before touching any files
     local map_json="{}"
-    declare -A email_map
+    declare -A email_map type_map pid_map
     for k in "${!num_map[@]}"; do
-        local email_for_num
-        email_for_num=$(jq -r --arg n "$k" '.accounts[$n].email' "$SEQUENCE_FILE")
-        email_map[$k]="$email_for_num"
+        local acct_type_for_num
+        acct_type_for_num=$(get_account_type "$k")
+        type_map[$k]="$acct_type_for_num"
+        if [[ "$acct_type_for_num" == "vertex" ]]; then
+            pid_map[$k]=$(jq -r --arg n "$k" '.accounts[$n].projectId // ""' "$SEQUENCE_FILE")
+            email_map[$k]=""
+        else
+            email_map[$k]=$(jq -r --arg n "$k" '.accounts[$n].email' "$SEQUENCE_FILE")
+            pid_map[$k]=""
+        fi
         map_json=$(jq -n --argjson obj "$map_json" --arg k "$k" --argjson v "${num_map[$k]}" '$obj + {($k): $v}')
     done
 
@@ -2236,38 +2767,41 @@ cmd_reorder() {
         local new_num=${num_map[$old_num]}
         [[ "$old_num" == "$new_num" ]] && continue
 
-        local email
-        email="${email_map[$old_num]}"
+        local acct_type="${type_map[$old_num]}"
 
-        case "$platform" in
-            macos)
-                local creds
-                creds=$(security find-generic-password -s "Claude Code-Account-${old_num}-${email}" -w 2>/dev/null || echo "")
-                if [[ -n "$creds" ]]; then
-                    if ! security add-generic-password -U -s "Claude Code-Account-tmp-${old_num}-${email}" -a "$USER" -w "$creds" 2>/dev/null; then
-                        log_warning "Failed to create temp Keychain entry for Account-${old_num} (${email})"
-                        rename_failed=true
-                        continue
+        if [[ "$acct_type" == "vertex" ]]; then
+            local pid="${pid_map[$old_num]}"
+            local old_vcred="$BACKUP_DIR/credentials/.claude-vertex-env-${old_num}-${pid}.json"
+            [[ -f "$old_vcred" ]] && mv "$old_vcred" "$BACKUP_DIR/credentials/.claude-vertex-env-tmp-${old_num}-${pid}.json"
+            local old_vconf="$BACKUP_DIR/configs/.claude-config-${old_num}-vertex-${pid}.json"
+            [[ -f "$old_vconf" ]] && mv "$old_vconf" "$BACKUP_DIR/configs/.claude-config-tmp-${old_num}-vertex-${pid}.json"
+        else
+            local email="${email_map[$old_num]}"
+            case "$platform" in
+                macos)
+                    local creds
+                    creds=$(security find-generic-password -s "Claude Code-Account-${old_num}-${email}" -w 2>/dev/null || echo "")
+                    if [[ -n "$creds" ]]; then
+                        if ! security add-generic-password -U -s "Claude Code-Account-tmp-${old_num}-${email}" -a "$USER" -w "$creds" 2>/dev/null; then
+                            log_warning "Failed to create temp Keychain entry for Account-${old_num} (${email})"
+                            rename_failed=true
+                            continue
+                        fi
+                        if security find-generic-password -s "Claude Code-Account-tmp-${old_num}-${email}" -w >/dev/null 2>&1; then
+                            security delete-generic-password -s "Claude Code-Account-${old_num}-${email}" 2>/dev/null || true
+                        else
+                            log_warning "Temp Keychain entry not found after create for Account-${old_num} — keeping original"
+                            rename_failed=true
+                        fi
                     fi
-                    # Verify temp entry was created before deleting original
-                    if security find-generic-password -s "Claude Code-Account-tmp-${old_num}-${email}" -w >/dev/null 2>&1; then
-                        security delete-generic-password -s "Claude Code-Account-${old_num}-${email}" 2>/dev/null || true
-                    else
-                        log_warning "Temp Keychain entry not found after create for Account-${old_num} — keeping original"
-                        rename_failed=true
-                    fi
-                fi
-                ;;
-            linux|wsl)
-                local old_cred="$BACKUP_DIR/credentials/.claude-credentials-${old_num}-${email}.json"
-                if [[ -f "$old_cred" ]]; then
-                    mv "$old_cred" "$BACKUP_DIR/credentials/.claude-credentials-tmp-${old_num}-${email}.json"
-                fi
-                ;;
-        esac
-        local old_conf="$BACKUP_DIR/configs/.claude-config-${old_num}-${email}.json"
-        if [[ -f "$old_conf" ]]; then
-            mv "$old_conf" "$BACKUP_DIR/configs/.claude-config-tmp-${old_num}-${email}.json"
+                    ;;
+                linux|wsl)
+                    local old_cred="$BACKUP_DIR/credentials/.claude-credentials-${old_num}-${email}.json"
+                    [[ -f "$old_cred" ]] && mv "$old_cred" "$BACKUP_DIR/credentials/.claude-credentials-tmp-${old_num}-${email}.json"
+                    ;;
+            esac
+            local old_conf="$BACKUP_DIR/configs/.claude-config-${old_num}-${email}.json"
+            [[ -f "$old_conf" ]] && mv "$old_conf" "$BACKUP_DIR/configs/.claude-config-tmp-${old_num}-${email}.json"
         fi
     done
 
@@ -2281,38 +2815,41 @@ cmd_reorder() {
         local new_num=${num_map[$old_num]}
         [[ "$old_num" == "$new_num" ]] && continue
 
-        local email
-        email="${email_map[$old_num]}"
+        local acct_type="${type_map[$old_num]}"
 
-        case "$platform" in
-            macos)
-                local creds
-                creds=$(security find-generic-password -s "Claude Code-Account-tmp-${old_num}-${email}" -w 2>/dev/null || echo "")
-                if [[ -n "$creds" ]]; then
-                    if ! security add-generic-password -U -s "Claude Code-Account-${new_num}-${email}" -a "$USER" -w "$creds" 2>/dev/null; then
-                        log_warning "Failed to rename Keychain entry from tmp-${old_num} to Account-${new_num} (${email})"
-                        rename_failed=true
-                        continue
+        if [[ "$acct_type" == "vertex" ]]; then
+            local pid="${pid_map[$old_num]}"
+            local tmp_vcred="$BACKUP_DIR/credentials/.claude-vertex-env-tmp-${old_num}-${pid}.json"
+            [[ -f "$tmp_vcred" ]] && mv "$tmp_vcred" "$BACKUP_DIR/credentials/.claude-vertex-env-${new_num}-${pid}.json"
+            local tmp_vconf="$BACKUP_DIR/configs/.claude-config-tmp-${old_num}-vertex-${pid}.json"
+            [[ -f "$tmp_vconf" ]] && mv "$tmp_vconf" "$BACKUP_DIR/configs/.claude-config-${new_num}-vertex-${pid}.json"
+        else
+            local email="${email_map[$old_num]}"
+            case "$platform" in
+                macos)
+                    local creds
+                    creds=$(security find-generic-password -s "Claude Code-Account-tmp-${old_num}-${email}" -w 2>/dev/null || echo "")
+                    if [[ -n "$creds" ]]; then
+                        if ! security add-generic-password -U -s "Claude Code-Account-${new_num}-${email}" -a "$USER" -w "$creds" 2>/dev/null; then
+                            log_warning "Failed to rename Keychain entry from tmp-${old_num} to Account-${new_num} (${email})"
+                            rename_failed=true
+                            continue
+                        fi
+                        if security find-generic-password -s "Claude Code-Account-${new_num}-${email}" -w >/dev/null 2>&1; then
+                            security delete-generic-password -s "Claude Code-Account-tmp-${old_num}-${email}" 2>/dev/null || true
+                        else
+                            log_warning "New Keychain entry not found after create for Account-${new_num} — keeping temp entry"
+                            rename_failed=true
+                        fi
                     fi
-                    # Verify new entry was created before deleting temp
-                    if security find-generic-password -s "Claude Code-Account-${new_num}-${email}" -w >/dev/null 2>&1; then
-                        security delete-generic-password -s "Claude Code-Account-tmp-${old_num}-${email}" 2>/dev/null || true
-                    else
-                        log_warning "New Keychain entry not found after create for Account-${new_num} — keeping temp entry"
-                        rename_failed=true
-                    fi
-                fi
-                ;;
-            linux|wsl)
-                local tmp_cred="$BACKUP_DIR/credentials/.claude-credentials-tmp-${old_num}-${email}.json"
-                if [[ -f "$tmp_cred" ]]; then
-                    mv "$tmp_cred" "$BACKUP_DIR/credentials/.claude-credentials-${new_num}-${email}.json"
-                fi
-                ;;
-        esac
-        local tmp_conf="$BACKUP_DIR/configs/.claude-config-tmp-${old_num}-${email}.json"
-        if [[ -f "$tmp_conf" ]]; then
-            mv "$tmp_conf" "$BACKUP_DIR/configs/.claude-config-${new_num}-${email}.json"
+                    ;;
+                linux|wsl)
+                    local tmp_cred="$BACKUP_DIR/credentials/.claude-credentials-tmp-${old_num}-${email}.json"
+                    [[ -f "$tmp_cred" ]] && mv "$tmp_cred" "$BACKUP_DIR/credentials/.claude-credentials-${new_num}-${email}.json"
+                    ;;
+            esac
+            local tmp_conf="$BACKUP_DIR/configs/.claude-config-tmp-${old_num}-${email}.json"
+            [[ -f "$tmp_conf" ]] && mv "$tmp_conf" "$BACKUP_DIR/configs/.claude-config-${new_num}-${email}.json"
         fi
     done
 
@@ -2327,11 +2864,11 @@ cmd_reorder() {
     local new_account_nums
     new_account_nums=$(jq -r '.sequence | sort | map(tostring) | .[]' "$SEQUENCE_FILE")
     while IFS= read -r num; do
-        local email alias_name
-        email=$(jq -r --arg n "$num" '.accounts[$n].email' "$SEQUENCE_FILE")
+        local display_id alias_name
+        display_id=$(get_account_display_id "$num")
         alias_name=$(jq -r --arg n "$num" '.accounts[$n].alias // empty' "$SEQUENCE_FILE")
-        local label="$email"
-        [[ -n "$alias_name" ]] && label="$email [$alias_name]"
+        local label="$display_id"
+        [[ -n "$alias_name" ]] && label="$display_id [$alias_name]"
         local marker=""
         [[ "$num" == "$new_active" ]] && marker=" ${COLOR_GREEN}(active)${COLOR_RESET}"
         echo -e "  $num: $label$marker"
@@ -2671,30 +3208,42 @@ cmd_export() {
     local platform
     platform=$(detect_platform)
 
-    case "$platform" in
-        macos)
-            # Export macOS keychain entries
-            local creds_dir="$temp_dir/credentials"
-            mkdir -p "$creds_dir"
+    local creds_dir="$temp_dir/credentials"
+    mkdir -p "$creds_dir"
 
-            while IFS= read -r line; do
-                local num email
-                num=$(echo "$line" | jq -r '.num')
-                email=$(echo "$line" | jq -r '.email')
+    while IFS= read -r line; do
+        local num atype
+        num=$(echo "$line" | jq -r '.num')
+        atype=$(echo "$line" | jq -r '.type')
 
-                local creds
-                creds=$(read_account_credentials "$num" "$email")
-                if [[ -n "$creds" ]]; then
-                    echo "$creds" > "$creds_dir/.claude-credentials-${num}-${email}.json"
-                    chmod 600 "$creds_dir/.claude-credentials-${num}-${email}.json"
-                fi
-            done < <(jq -c '.accounts | to_entries[] | {num: .key, email: .value.email}' "$SEQUENCE_FILE")
-            ;;
-        linux|wsl)
-            # Copy credential files directly
-            cp -r "$BACKUP_DIR/credentials" "$temp_dir/" 2>/dev/null || true
-            ;;
-    esac
+        if [[ "$atype" == "vertex" ]]; then
+            local pid
+            pid=$(echo "$line" | jq -r '.projectId')
+            local vertex_env
+            vertex_env=$(read_vertex_credentials "$num" "$pid")
+            if [[ -n "$vertex_env" ]]; then
+                echo "$vertex_env" > "$creds_dir/.claude-vertex-env-${num}-${pid}.json"
+                chmod 600 "$creds_dir/.claude-vertex-env-${num}-${pid}.json"
+            fi
+        else
+            local email
+            email=$(echo "$line" | jq -r '.email')
+            case "$platform" in
+                macos)
+                    local creds
+                    creds=$(read_account_credentials "$num" "$email")
+                    if [[ -n "$creds" ]]; then
+                        echo "$creds" > "$creds_dir/.claude-credentials-${num}-${email}.json"
+                        chmod 600 "$creds_dir/.claude-credentials-${num}-${email}.json"
+                    fi
+                    ;;
+                linux|wsl)
+                    local src_cred="$BACKUP_DIR/credentials/.claude-credentials-${num}-${email}.json"
+                    [[ -f "$src_cred" ]] && cp "$src_cred" "$creds_dir/"
+                    ;;
+            esac
+        fi
+    done < <(jq -c '.accounts | to_entries[] | {num: .key, type: (.value.type // "oauth"), email: (.value.email // ""), projectId: (.value.projectId // "")}' "$SEQUENCE_FILE")
 
     # Create tar archive
     tar -czf "$output_path" -C "$temp_dir" . 2>/dev/null
@@ -2757,42 +3306,62 @@ cmd_import() {
     platform=$(detect_platform)
 
     while IFS= read -r line; do
-        local num email
+        local num atype email project_id
         num=$(echo "$line" | jq -r '.num')
+        atype=$(echo "$line" | jq -r '.type')
         email=$(echo "$line" | jq -r '.email')
+        project_id=$(echo "$line" | jq -r '.projectId')
 
         # Check if account already exists
-        if account_exists "$email"; then
-            log_info "Skipping existing account: $email"
-            continue
+        if [[ "$atype" == "vertex" ]]; then
+            if account_exists_by_project "$project_id"; then
+                log_info "Skipping existing VertexAI account: vertex:$project_id"
+                continue
+            fi
+        else
+            if account_exists "$email"; then
+                log_info "Skipping existing account: $email"
+                continue
+            fi
         fi
 
-        # Get next available account number
         local new_num
         new_num=$(get_next_account_number)
 
-        # Import config
-        local config_file="$temp_dir/configs/.claude-config-${num}-${email}.json"
-        if [[ -f "$config_file" ]]; then
-            write_account_config "$new_num" "$email" "$(cat "$config_file")"
-        fi
+        if [[ "$atype" == "vertex" ]]; then
+            # Import VertexAI config and credentials
+            local vertex_config="$temp_dir/configs/.claude-config-${num}-vertex-${project_id}.json"
+            [[ -f "$vertex_config" ]] && write_vertex_config "$new_num" "$project_id" "$(cat "$vertex_config")"
 
-        # Import credentials
-        case "$platform" in
-            macos)
-                local cred_file="$temp_dir/credentials/.claude-credentials-${num}-${email}.json"
-                if [[ -f "$cred_file" ]]; then
-                    write_account_credentials "$new_num" "$email" "$(cat "$cred_file")"
+            local vertex_cred="$temp_dir/credentials/.claude-vertex-env-${num}-${project_id}.json"
+            if [[ -f "$vertex_cred" ]]; then
+                write_vertex_credentials "$new_num" "$project_id" "$(cat "$vertex_cred")"
+                # Warn if service account path doesn't exist on this machine
+                local sa_path
+                sa_path=$(jq -r '.GOOGLE_APPLICATION_CREDENTIALS // empty' "$vertex_cred" 2>/dev/null)
+                if [[ -n "$sa_path" && ! -f "$sa_path" ]]; then
+                    log_warning "Service account file not found: $sa_path (update path after import)"
                 fi
-                ;;
-            linux|wsl)
-                local cred_file="$temp_dir/credentials/.claude-credentials-${num}-${email}.json"
-                if [[ -f "$cred_file" ]]; then
-                    cp "$cred_file" "$BACKUP_DIR/credentials/.claude-credentials-${new_num}-${email}.json"
-                    chmod 600 "$BACKUP_DIR/credentials/.claude-credentials-${new_num}-${email}.json"
-                fi
-                ;;
-        esac
+            fi
+        else
+            # Import OAuth config
+            local config_file="$temp_dir/configs/.claude-config-${num}-${email}.json"
+            [[ -f "$config_file" ]] && write_account_config "$new_num" "$email" "$(cat "$config_file")"
+
+            # Import OAuth credentials
+            local cred_file="$temp_dir/credentials/.claude-credentials-${num}-${email}.json"
+            if [[ -f "$cred_file" ]]; then
+                case "$platform" in
+                    macos)
+                        write_account_credentials "$new_num" "$email" "$(cat "$cred_file")"
+                        ;;
+                    linux|wsl)
+                        cp "$cred_file" "$BACKUP_DIR/credentials/.claude-credentials-${new_num}-${email}.json"
+                        chmod 600 "$BACKUP_DIR/credentials/.claude-credentials-${new_num}-${email}.json"
+                        ;;
+                esac
+            fi
+        fi
 
         # Add to sequence
         local account_data
@@ -2808,8 +3377,14 @@ cmd_import() {
 
         write_json "$SEQUENCE_FILE" "$updated_sequence"
 
-        log_info "Imported: $email as Account-$new_num"
-    done < <(echo "$imported_sequence" | jq -c '.accounts | to_entries[] | {num: .key, email: .value.email}')
+        local import_label
+        if [[ "$atype" == "vertex" ]]; then
+            import_label="vertex:$project_id"
+        else
+            import_label="$email"
+        fi
+        log_info "Imported: $import_label as Account-$new_num"
+    done < <(echo "$imported_sequence" | jq -c '.accounts | to_entries[] | {num: .key, type: (.value.type // "oauth"), email: (.value.email // ""), projectId: (.value.projectId // "")}')
 
     invalidate_cache
     complete_progress
@@ -5371,37 +5946,59 @@ switch_isolated() {
         return 1
     fi
 
-    local target_email
-    target_email=$(jq -r --arg num "$target_account" '.accounts[$num].email' "$SEQUENCE_FILE")
+    local target_type
+    target_type=$(get_account_type "$target_account")
     local target_alias
     target_alias=$(jq -r --arg num "$target_account" '.accounts[$num].alias // empty' "$SEQUENCE_FILE")
     local profile_name="${target_alias:-account-$target_account}"
+    local display_label
+    display_label=$(get_account_display_id "$target_account")
 
     local profile_dir="$PROFILES_DIR/$profile_name"
     mkdir -p "$profile_dir"
 
-    if [[ ! -f "$profile_dir/.claude.json" ]]; then
+    if [[ ! -f "$profile_dir/.claude.json" && ! -f "$profile_dir/settings.json" ]]; then
         (( quiet )) || show_progress "Creating isolated profile: $profile_name"
 
-        # Copy credentials and config from account backup
-        local target_creds target_config
-        target_creds=$(read_account_credentials "$target_account" "$target_email")
-        target_config=$(read_account_config "$target_account" "$target_email")
-
-        if [[ -z "$target_creds" || -z "$target_config" ]]; then
-            log_error "Missing backup data for Account-$target_account. Run 'ccm verify $target_account' first."
-            return 1
+        if [[ "$target_type" == "vertex" ]]; then
+            # VertexAI profile: env vars in settings.json, minimal .claude.json
+            local project_id
+            project_id=$(jq -r --arg num "$target_account" '.accounts[$num].projectId' "$SEQUENCE_FILE")
+            local vertex_env
+            vertex_env=$(read_vertex_credentials "$target_account" "$project_id")
+            if [[ -z "$vertex_env" ]]; then
+                log_error "Missing VertexAI backup for Account-$target_account. Run 'ccm verify $target_account' first."
+                return 1
+            fi
+            # Write minimal .claude.json (no oauthAccount)
+            echo '{}' > "$profile_dir/.claude.json"
+            # Write empty credentials placeholder
+            echo '{}' > "$profile_dir/credentials.json"
+            chmod 600 "$profile_dir/credentials.json"
+            # Copy settings from main and merge VertexAI env vars
+            if [[ -f "$HOME/.claude/settings.json" ]]; then
+                cp "$HOME/.claude/settings.json" "$profile_dir/settings.json"
+            else
+                echo '{}' > "$profile_dir/settings.json"
+            fi
+            write_vertex_env "$profile_dir/settings.json" "$vertex_env"
+        else
+            # OAuth profile: credentials + config from backup
+            local target_email
+            target_email=$(jq -r --arg num "$target_account" '.accounts[$num].email' "$SEQUENCE_FILE")
+            local target_creds target_config
+            target_creds=$(read_account_credentials "$target_account" "$target_email")
+            target_config=$(read_account_config "$target_account" "$target_email")
+            if [[ -z "$target_creds" || -z "$target_config" ]]; then
+                log_error "Missing backup data for Account-$target_account. Run 'ccm verify $target_account' first."
+                return 1
+            fi
+            echo "$target_config" > "$profile_dir/.claude.json"
+            echo "$target_creds" > "$profile_dir/credentials.json"
+            chmod 600 "$profile_dir/credentials.json"
+            [[ -f "$HOME/.claude/settings.json" ]] && cp "$HOME/.claude/settings.json" "$profile_dir/settings.json"
         fi
 
-        # Write config to profile directory
-        echo "$target_config" > "$profile_dir/.claude.json"
-
-        # Write credentials to profile (file-based, platform-independent for isolation)
-        echo "$target_creds" > "$profile_dir/credentials.json"
-        chmod 600 "$profile_dir/credentials.json"
-
-        # Copy settings and MCP config from main ~/.claude/
-        [[ -f "$HOME/.claude/settings.json" ]] && cp "$HOME/.claude/settings.json" "$profile_dir/settings.json"
         [[ -f "$HOME/.claude/.mcp.json" ]] && cp "$HOME/.claude/.mcp.json" "$profile_dir/.mcp.json"
 
         if (( quiet )); then :
@@ -5411,18 +6008,16 @@ switch_isolated() {
         fi
     fi
 
-    # Export the env var for this shell session (only affects the ccm subshell)
     export CLAUDE_CONFIG_DIR="$profile_dir"
 
     if (( quiet )); then
-        # Machine-readable: emit only the profile path so callers can capture it
         printf '%s\n' "$profile_dir"
         return 0
     fi
 
     echo ""
     echo -e "${COLOR_BOLD}Isolated profile activated: ${COLOR_GREEN}$profile_name${COLOR_RESET}"
-    echo -e "  Account: $target_email"
+    echo -e "  Account: $display_label"
     echo -e "  Config:  $profile_dir"
     echo ""
     echo "  CLAUDE_CONFIG_DIR=$profile_dir"
@@ -5460,22 +6055,33 @@ profiles_list() {
         return 0
     fi
 
-    printf "  %-20s %-30s %s\n" "Profile" "Email" "Status"
-    printf "  %-20s %-30s %s\n" "-------" "-----" "------"
+    printf "  %-20s %-30s %s\n" "Profile" "Account" "Status"
+    printf "  %-20s %-30s %s\n" "-------" "-------" "------"
 
     for profile_dir in "$PROFILES_DIR"/*/; do
         [[ -d "$profile_dir" ]] || continue
         local name
         name=$(basename "$profile_dir")
-        local email="unknown"
-        if [[ -f "$profile_dir/.claude.json" ]]; then
-            email=$(jq -r '.oauthAccount.emailAddress // "unknown"' "$profile_dir/.claude.json" 2>/dev/null)
+        local account_id="unknown"
+        # Check if profile is VertexAI (has CLAUDE_CODE_USE_VERTEX in settings.json)
+        if [[ -f "$profile_dir/settings.json" ]]; then
+            local vertex_flag
+            vertex_flag=$(jq -r '.env.CLAUDE_CODE_USE_VERTEX // empty' "$profile_dir/settings.json" 2>/dev/null)
+            if [[ "$vertex_flag" == "1" ]]; then
+                local pid
+                pid=$(jq -r '.env.ANTHROPIC_VERTEX_PROJECT_ID // "unknown"' "$profile_dir/settings.json" 2>/dev/null)
+                account_id="vertex:$pid"
+            elif [[ -f "$profile_dir/.claude.json" ]]; then
+                account_id=$(jq -r '.oauthAccount.emailAddress // "unknown"' "$profile_dir/.claude.json" 2>/dev/null)
+            fi
+        elif [[ -f "$profile_dir/.claude.json" ]]; then
+            account_id=$(jq -r '.oauthAccount.emailAddress // "unknown"' "$profile_dir/.claude.json" 2>/dev/null)
         fi
         local status="${COLOR_GREEN}ready${COLOR_RESET}"
         if [[ "${CLAUDE_CONFIG_DIR:-}" == "$profile_dir" ]] || [[ "${CLAUDE_CONFIG_DIR:-}" == "${profile_dir%/}" ]]; then
             status="${COLOR_CYAN}active${COLOR_RESET}"
         fi
-        printf "  %-20s %-30s " "$name" "$email"
+        printf "  %-20s %-30s " "$name" "$account_id"
         echo -e "$status"
     done
     echo ""
@@ -5499,7 +6105,32 @@ profiles_sync() {
     fi
 
     show_progress "Syncing settings to profile: $name"
-    [[ -f "$HOME/.claude/settings.json" ]] && cp "$HOME/.claude/settings.json" "$profile_dir/settings.json"
+
+    if [[ -f "$HOME/.claude/settings.json" ]]; then
+        # Check if profile is VertexAI — preserve its env block during sync
+        local is_vertex=0
+        if [[ -f "$profile_dir/settings.json" ]]; then
+            local vertex_flag
+            vertex_flag=$(jq -r '.env.CLAUDE_CODE_USE_VERTEX // empty' "$profile_dir/settings.json" 2>/dev/null)
+            [[ "$vertex_flag" == "1" ]] && is_vertex=1
+        fi
+
+        if [[ "$is_vertex" -eq 1 ]]; then
+            # Preserve VertexAI env vars, merge everything else from main settings
+            local profile_env main_settings
+            profile_env=$(jq '.env // {}' "$profile_dir/settings.json" 2>/dev/null)
+            main_settings=$(jq --argjson penv "$profile_env" 'del(.env) * {env: $penv}' "$HOME/.claude/settings.json" 2>/dev/null)
+            if [[ -n "$main_settings" ]]; then
+                local orig_perms
+                orig_perms=$(stat -f '%Lp' "$profile_dir/settings.json" 2>/dev/null || stat -c '%a' "$profile_dir/settings.json" 2>/dev/null || echo "644")
+                echo "$main_settings" > "$profile_dir/settings.json.tmp" && mv "$profile_dir/settings.json.tmp" "$profile_dir/settings.json"
+                chmod "$orig_perms" "$profile_dir/settings.json"
+            fi
+        else
+            cp "$HOME/.claude/settings.json" "$profile_dir/settings.json"
+        fi
+    fi
+
     [[ -f "$HOME/.claude/.mcp.json" ]] && cp "$HOME/.claude/.mcp.json" "$profile_dir/.mcp.json"
     complete_progress
     log_success "Profile '$name' synced with current settings"
@@ -6211,13 +6842,19 @@ cmd_setup() {
 
     # Step 3: Import current account
     echo -e "${COLOR_BOLD}Step 3: Account setup${COLOR_RESET}"
-    local current_email
-    current_email=$(get_current_account 2>/dev/null || echo "none")
+    local current_id current_type display_label_setup
+    current_id=$(get_current_account 2>/dev/null || echo "none")
+    current_type=$(get_current_account_type)
 
-    if [[ "$current_email" != "none" ]]; then
-        echo "  Found logged-in account: $current_email"
+    if [[ "$current_id" != "none" ]]; then
+        if [[ "$current_type" == "vertex" ]]; then
+            display_label_setup="vertex:$current_id"
+        else
+            display_label_setup="$current_id"
+        fi
+        echo "  Found logged-in account: $display_label_setup"
 
-        if [[ -f "$SEQUENCE_FILE" ]] && account_exists "$current_email"; then
+        if [[ -f "$SEQUENCE_FILE" ]] && account_exists "$current_id"; then
             echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} Already managed by CCM"
         else
             echo -n "  Import this account? (Y/n): "
@@ -6318,60 +6955,96 @@ cmd_recover() {
     local account_count
     account_count=$(jq '.accounts | length' "$SEQUENCE_FILE")
 
-    while IFS=$'\t' read -r num email; do
-        [[ -z "$num" || -z "$email" ]] && continue
+    while IFS=$'\t' read -r num atype email project_id; do
+        [[ -z "$num" ]] && continue
+        local display_label
 
-        local creds_path="$BACKUP_DIR/credentials/account-${num}-${email}"
-        local config_path="$BACKUP_DIR/configs/account-${num}-${email}.json"
-
-        if [[ ! -f "$creds_path" ]] && [[ ! -d "$creds_path" ]]; then
-            echo -e "  ${COLOR_RED}${SYM_ERR}${COLOR_RESET} Missing credentials for Account-$num ($email)"
-            issues=$((issues + 1))
+        if [[ "$atype" == "vertex" ]]; then
+            display_label="vertex:$project_id"
+            local vcred="$BACKUP_DIR/credentials/.claude-vertex-env-${num}-${project_id}.json"
+            if [[ ! -f "$vcred" ]]; then
+                echo -e "  ${COLOR_RED}${SYM_ERR}${COLOR_RESET} Missing VertexAI env backup for Account-$num ($display_label)"
+                issues=$((issues + 1))
+            else
+                echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} Account-$num ($display_label) credentials present"
+            fi
         else
-            echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} Account-$num ($email) credentials present"
-        fi
+            display_label="$email"
+            local creds_found=0
+            local platform_check
+            platform_check=$(detect_platform)
+            case "$platform_check" in
+                macos)
+                    if security find-generic-password -s "Claude Code-Account-${num}-${email}" -w &>/dev/null; then
+                        creds_found=1
+                    fi
+                    ;;
+                linux|wsl)
+                    local cred_file="$BACKUP_DIR/credentials/.claude-credentials-${num}-${email}.json"
+                    [[ -f "$cred_file" ]] && creds_found=1
+                    ;;
+            esac
+            if [[ "$creds_found" -eq 0 ]]; then
+                echo -e "  ${COLOR_RED}${SYM_ERR}${COLOR_RESET} Missing credentials for Account-$num ($display_label)"
+                issues=$((issues + 1))
+            else
+                echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} Account-$num ($display_label) credentials present"
+            fi
 
-        if [[ ! -f "$config_path" ]]; then
-            echo -e "  ${COLOR_RED}${SYM_ERR}${COLOR_RESET} Missing config for Account-$num ($email)"
-            issues=$((issues + 1))
+            local config_path="$BACKUP_DIR/configs/.claude-config-${num}-${email}.json"
+            if [[ ! -f "$config_path" ]]; then
+                echo -e "  ${COLOR_RED}${SYM_ERR}${COLOR_RESET} Missing config for Account-$num ($display_label)"
+                issues=$((issues + 1))
+            fi
         fi
-    done < <(jq -r '.accounts | to_entries[] | [.key, .value.email] | @tsv' "$SEQUENCE_FILE" 2>/dev/null)
+    done < <(jq -r '.accounts | to_entries[] | [.key, (.value.type // "oauth"), (.value.email // ""), (.value.projectId // "")] | @tsv' "$SEQUENCE_FILE" 2>/dev/null)
     echo ""
 
     # Check 2: Active account consistency
     echo -e "${COLOR_BOLD}Check 2: Active account state${COLOR_RESET}"
     local active_num
     active_num=$(jq -r '.activeAccountNumber' "$SEQUENCE_FILE")
-    local active_email
-    active_email=$(jq -r --arg n "$active_num" '.accounts[$n].email // empty' "$SEQUENCE_FILE")
-    local current_email
-    current_email=$(get_current_account 2>/dev/null || echo "none")
+    local active_type
+    active_type=$(get_account_type "$active_num")
+    local current_id
+    current_id=$(get_current_account 2>/dev/null || echo "none")
 
-    if [[ "$current_email" == "none" ]]; then
+    if [[ "$current_id" == "none" ]]; then
         echo -e "  ${COLOR_YELLOW}${SYM_WARN}${COLOR_RESET} No active account in Claude Code config"
         issues=$((issues + 1))
-    elif [[ "$current_email" != "$active_email" ]]; then
-        echo -e "  ${COLOR_YELLOW}${SYM_WARN}${COLOR_RESET} Active email mismatch:"
-        echo "    Claude Code: $current_email"
-        echo "    CCM expects: $active_email (Account-$active_num)"
-        issues=$((issues + 1))
     else
-        echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} Active account matches: $current_email (Account-$active_num)"
+        local expected_id
+        if [[ "$active_type" == "vertex" ]]; then
+            expected_id=$(jq -r --arg n "$active_num" '.accounts[$n].projectId // empty' "$SEQUENCE_FILE")
+        else
+            expected_id=$(jq -r --arg n "$active_num" '.accounts[$n].email // empty' "$SEQUENCE_FILE")
+        fi
+        if [[ "$current_id" != "$expected_id" ]]; then
+            echo -e "  ${COLOR_YELLOW}${SYM_WARN}${COLOR_RESET} Active account mismatch:"
+            echo "    Claude Code: $current_id"
+            echo "    CCM expects: $expected_id (Account-$active_num)"
+            issues=$((issues + 1))
+        else
+            echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} Active account matches: $current_id (Account-$active_num)"
+        fi
     fi
     echo ""
 
-    # Check 3: Keychain consistency (macOS only)
+    # Check 3: Keychain consistency (macOS only, OAuth accounts only)
     local platform
     platform=$(detect_platform)
     if [[ "$platform" == "macos" ]]; then
         echo -e "${COLOR_BOLD}Check 3: Keychain entries (macOS)${COLOR_RESET}"
-        local keychain_ok=1
-        if security find-generic-password -s "claude-oauth-credentials" -w &>/dev/null; then
-            echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} Keychain entry for claude-oauth-credentials exists"
+        # Only check if active account is OAuth
+        if [[ "$active_type" != "vertex" ]]; then
+            if security find-generic-password -s "claude-oauth-credentials" -w &>/dev/null; then
+                echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} Keychain entry for claude-oauth-credentials exists"
+            else
+                echo -e "  ${COLOR_RED}${SYM_ERR}${COLOR_RESET} Missing Keychain entry for claude-oauth-credentials"
+                issues=$((issues + 1))
+            fi
         else
-            echo -e "  ${COLOR_RED}${SYM_ERR}${COLOR_RESET} Missing Keychain entry for claude-oauth-credentials"
-            keychain_ok=0
-            issues=$((issues + 1))
+            echo -e "  ${COLOR_CYAN}—${COLOR_RESET} Skipped (active account is VertexAI, no Keychain needed)"
         fi
         echo ""
     fi
@@ -6383,8 +7056,22 @@ cmd_recover() {
             [[ -d "$profile_dir" ]] || continue
             local pname
             pname=$(basename "$profile_dir")
+            # Check for either .claude.json (OAuth) or settings.json with VertexAI env (VertexAI)
             if [[ -f "$profile_dir/.claude.json" ]]; then
-                echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} Profile '$pname' has valid config"
+                local has_oauth has_vertex_env
+                has_oauth=$(jq -e '.oauthAccount' "$profile_dir/.claude.json" 2>/dev/null && echo "yes" || echo "no")
+                has_vertex_env="no"
+                if [[ -f "$profile_dir/settings.json" ]]; then
+                    local vf
+                    vf=$(jq -r '.env.CLAUDE_CODE_USE_VERTEX // empty' "$profile_dir/settings.json" 2>/dev/null)
+                    [[ "$vf" == "1" ]] && has_vertex_env="yes"
+                fi
+                if [[ "$has_oauth" == "yes" || "$has_vertex_env" == "yes" ]]; then
+                    echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} Profile '$pname' has valid config"
+                else
+                    echo -e "  ${COLOR_YELLOW}${SYM_WARN}${COLOR_RESET} Profile '$pname' has no OAuth or VertexAI config"
+                    issues=$((issues + 1))
+                fi
             else
                 echo -e "  ${COLOR_RED}${SYM_ERR}${COLOR_RESET} Profile '$pname' is missing .claude.json"
                 issues=$((issues + 1))
@@ -6575,23 +7262,49 @@ fi
 SEQ="$HOME/.claude-switch-backup/sequence.json"
 CONF="$HOME/.claude/.claude.json"
 [[ -f "$CONF" ]] || CONF="$HOME/.claude.json"
+SETTINGS="$HOME/.claude/settings.json"
+[[ -n "${CLAUDE_CONFIG_DIR:-}" ]] && [[ -f "$CLAUDE_CONFIG_DIR/settings.json" ]] && SETTINGS="$CLAUDE_CONFIG_DIR/settings.json"
 
 ALIAS="" EMAIL_SHORT="" HEALTH="" TOTAL_ACCTS=0
-if [[ -f "$SEQ" ]] && [[ -f "$CONF" ]]; then
-    # Use CLAUDE_CODE_USER_EMAIL env var if available (v2.1.51+), fall back to config file
-    EMAIL="${CLAUDE_CODE_USER_EMAIL:-}"
-    [[ -z "$EMAIL" ]] && EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$CONF" 2>/dev/null)
-    if [[ -n "$EMAIL" ]]; then
-        EMAIL_SHORT="$EMAIL"
-        ACCT_DATA=$(jq -r --arg e "$EMAIL" '
-            .accounts | to_entries[] | select(.value.email == $e) |
-            "\(.value.alias // "")\t\(.value.healthStatus // "unknown")"
-        ' "$SEQ" 2>/dev/null)
-        if [[ -n "$ACCT_DATA" ]]; then
-            ALIAS=$(echo "$ACCT_DATA" | cut -f1)
-            HEALTH=$(echo "$ACCT_DATA" | cut -f2)
+if [[ -f "$SEQ" ]]; then
+    # Detect VertexAI vs OAuth
+    IS_VERTEX=0
+    if [[ -f "$SETTINGS" ]]; then
+        VF=$(jq -r '.env.CLAUDE_CODE_USE_VERTEX // empty' "$SETTINGS" 2>/dev/null)
+        [[ "$VF" == "1" ]] && IS_VERTEX=1
+    fi
+
+    if [[ "$IS_VERTEX" -eq 1 ]]; then
+        # VertexAI: identity is project ID from settings.json
+        PID=$(jq -r '.env.ANTHROPIC_VERTEX_PROJECT_ID // empty' "$SETTINGS" 2>/dev/null)
+        if [[ -n "$PID" ]]; then
+            EMAIL_SHORT="vertex:$PID"
+            ACCT_DATA=$(jq -r --arg pid "$PID" '
+                .accounts | to_entries[] | select(.value.projectId == $pid) |
+                "\(.value.alias // "")\t\(.value.healthStatus // "unknown")"
+            ' "$SEQ" 2>/dev/null)
+            if [[ -n "$ACCT_DATA" ]]; then
+                ALIAS=$(echo "$ACCT_DATA" | cut -f1)
+                HEALTH=$(echo "$ACCT_DATA" | cut -f2)
+            fi
+            TOTAL_ACCTS=$(jq '.accounts | length' "$SEQ" 2>/dev/null || echo "0")
         fi
-        TOTAL_ACCTS=$(jq '.accounts | length' "$SEQ" 2>/dev/null || echo "0")
+    elif [[ -f "$CONF" ]]; then
+        # OAuth: identity is email from .claude.json
+        EMAIL="${CLAUDE_CODE_USER_EMAIL:-}"
+        [[ -z "$EMAIL" ]] && EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$CONF" 2>/dev/null)
+        if [[ -n "$EMAIL" ]]; then
+            EMAIL_SHORT="$EMAIL"
+            ACCT_DATA=$(jq -r --arg e "$EMAIL" '
+                .accounts | to_entries[] | select(.value.email == $e) |
+                "\(.value.alias // "")\t\(.value.healthStatus // "unknown")"
+            ' "$SEQ" 2>/dev/null)
+            if [[ -n "$ACCT_DATA" ]]; then
+                ALIAS=$(echo "$ACCT_DATA" | cut -f1)
+                HEALTH=$(echo "$ACCT_DATA" | cut -f2)
+            fi
+            TOTAL_ACCTS=$(jq '.accounts | length' "$SEQ" 2>/dev/null || echo "0")
+        fi
     fi
 fi
 
