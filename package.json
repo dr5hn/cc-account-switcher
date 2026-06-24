@@ -32,5 +32,8 @@
     "ccm.sh",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "scripts": {
+    "test": "bats tests/"
+  }
 }
