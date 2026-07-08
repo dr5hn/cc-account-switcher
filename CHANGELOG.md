@@ -2,6 +2,10 @@
 
 All notable changes to CCM (Claude Code Manager) will be documented in this file.
 
+## [Unreleased]
+### Fixed
+- Statusline account line showed the globally-active account instead of the profile actually in use when a session ran inside an isolated profile (`ccm switch --isolated`). It read `oauthAccount.emailAddress` from `~/.claude/.claude.json` (or `~/.claude.json`) unconditionally, ignoring `CLAUDE_CONFIG_DIR`. It now prefers `$CLAUDE_CONFIG_DIR/.claude.json` when that variable is set, falling back to the global config otherwise.
+
 ## [4.2.0] - 2026-04-25
 ### Added
 - Statusline now shows the active model (display name) on its own line above the context bar.
