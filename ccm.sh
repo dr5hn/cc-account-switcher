@@ -476,6 +476,46 @@ init_sequence_file() {
 }
 
 # Migrate old schema to new schema
+# Purpose: Repairs binding values corrupted by the pre-4.2.1 reorder bug (issue #8),
+#          where jq with_entries wrote the whole {key,value} entry object as the
+#          value. Recursively unwraps nested entry objects (repeated reorders nest
+#          them deeper) and drops values that cannot be recovered.
+# Parameters: None
+# Returns: 0 always (no-op when sequence.json is absent or bindings are healthy)
+# Usage: repair_bindings
+repair_bindings() {
+    [[ -f "$SEQUENCE_FILE" ]] || return 0
+
+    # Cheap guard: only rewrite when at least one binding value is not a string
+    if ! jq -e '(.bindings // {}) | any(.[]; type != "string")' "$SEQUENCE_FILE" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local before after repaired
+    before=$(jq -r '(.bindings // {}) | length' "$SEQUENCE_FILE" 2>/dev/null || echo "0")
+
+    repaired=$(jq '
+        def unwrap: if type == "object" and has("value") then (.value | unwrap) else . end;
+        .bindings = (.bindings // {}
+            | with_entries(.value |= (unwrap | if type == "number" then tostring else . end))
+            | with_entries(select((.value | type) == "string" and (.value | test("^[0-9]+$"))))
+        )
+    ' "$SEQUENCE_FILE" 2>/dev/null) || return 0
+
+    echo "$repaired" | jq empty 2>/dev/null || return 0
+
+    cp "$SEQUENCE_FILE" "$SEQUENCE_FILE.backup-bindings-$(date +%s)"
+    write_json "$SEQUENCE_FILE" "$repaired"
+    invalidate_cache
+
+    after=$(jq -r '(.bindings // {}) | length' "$SEQUENCE_FILE" 2>/dev/null || echo "0")
+    log_warning "Repaired corrupted project bindings (issue #8). Backup saved."
+    if [[ "$after" -lt "$before" ]]; then
+        log_warning "Dropped $((before - after)) unrecoverable binding(s). Re-create with 'ccm bind'."
+    fi
+    return 0
+}
+
 # Purpose: Automatically migrates sequence.json from v1.0 to v2.0 schema
 # Parameters: None
 # Returns: None (modifies sequence.json with backup)
@@ -484,6 +524,11 @@ migrate_sequence_file() {
     if [[ ! -f "$SEQUENCE_FILE" ]]; then
         return 0
     fi
+
+    # Runs unconditionally — corrupted bindings exist at the CURRENT schema
+    # version, so this must not sit behind the version check below, which
+    # early-returns for everyone already on $SCHEMA_VERSION.
+    repair_bindings
 
     local current_version
     current_version=$(jq -r '.schemaVersion // "1.0"' "$SEQUENCE_FILE")
