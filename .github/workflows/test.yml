@@ -25,7 +25,17 @@ jobs:
 
       - name: Install bats-core (macOS)
         if: runner.os == 'macOS'
-        run: brew install bats-core
+        run: |
+          # ccm.sh requires bash 4.4+ (it uses `declare -A` at top level), but
+          # macOS ships bash 3.2 at /bin/bash. bats selects its interpreter via
+          # `#!/usr/bin/env bash`, so a modern bash must lead PATH or every test
+          # that sources ccm.sh dies with "declare: -A: invalid option".
+          brew install bats-core
+          brew list bash >/dev/null 2>&1 || brew install bash
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+      - name: Show bash version
+        run: bash --version | head -1
 
       - name: Run tests
         run: bats tests/
