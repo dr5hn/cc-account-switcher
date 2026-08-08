@@ -6463,6 +6463,23 @@ cmd_recover() {
         echo ""
     fi
 
+    # Check 5: Project bindings
+    echo -e "${COLOR_BOLD}Check 5: Project bindings${COLOR_RESET}"
+    local binding_count malformed
+    binding_count=$(jq -r '(.bindings // {}) | length' "$SEQUENCE_FILE" 2>/dev/null || echo "0")
+    malformed=$(jq -r '[(.bindings // {}) | .[] | select(type != "string")] | length' "$SEQUENCE_FILE" 2>/dev/null || echo "0")
+
+    if [[ "$binding_count" -eq 0 ]]; then
+        echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} No project bindings configured"
+    elif [[ "$malformed" -gt 0 ]]; then
+        echo -e "  ${COLOR_RED}${SYM_ERR}${COLOR_RESET} $malformed of $binding_count binding(s) are malformed (issue #8)"
+        echo "    Run any ccm command to auto-repair, or re-create with 'ccm bind'."
+        issues=$((issues + 1))
+    else
+        echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} All $binding_count binding(s) well-formed"
+    fi
+    echo ""
+
     # Summary
     if [[ "$issues" -eq 0 ]]; then
         log_success "No issues found. Credential state is consistent."
