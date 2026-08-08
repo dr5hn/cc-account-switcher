@@ -6983,7 +6983,10 @@ codex_latest_rollout() {
     local f
     while IFS= read -r f; do
         [[ -f "$f" ]] || continue
-        if jq -e 'select(.payload.rate_limits != null)' "$f" >/dev/null 2>&1; then
+        # grep -qF, not jq: rollouts run to hundreds of MB, and Codex appends
+        # to the live one, so a half-written final line makes jq fail on the
+        # whole file and we would skip a perfectly good reading.
+        if grep -qF '"rate_limits"' "$f" 2>/dev/null; then
             echo "$f"
             return 0
         fi

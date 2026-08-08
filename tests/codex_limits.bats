@@ -125,6 +125,23 @@ JSONL
     [ "$(echo "$output" | jq -r '.plan_type')" = "plus" ]
 }
 
+@test "survives a half-written final line in a live rollout" {
+    # Codex appends to the active rollout, so the last line can be truncated
+    # mid-write. Detection must not discard the whole file over it.
+    mkdir -p "$ROLLOUT_DIR"
+    printf '%s\n%s' \
+      '{"type":"event_msg","payload":{"rate_limits":{"primary":{"used_percent":5,"window_minutes":300,"resets_at":100},"plan_type":"pro"},"info":{"total_token_usage":{"total_tokens":42},"model_context_window":1000}}}' \
+      '{"type":"turn_context","payload":{"mod' \
+      > "$ROLLOUT_DIR/rollout-live.jsonl"
+
+    run codex_latest_rollout
+    [ "$status" -eq 0 ]
+
+    run codex_read_limits
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.plan_type')" = "pro" ]
+}
+
 @test "gives up when no recent rollout carries rate limit data" {
     mkdir -p "$ROLLOUT_DIR"
     for n in a b c; do
