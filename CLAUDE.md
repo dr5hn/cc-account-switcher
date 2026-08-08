@@ -100,11 +100,12 @@ The script follows a strict top-to-bottom section layout:
 
 ## Version Bumping
 
-Version lives in two places that must stay in sync:
+Version lives in three places that must stay in sync:
 - `ccm.sh` line 9: `readonly CCM_VERSION="X.Y.Z"`
 - `CHANGELOG.md`: `## [X.Y.Z] - YYYY-MM-DD` section
+- `package.json`: `"version"` — the npm publish workflow fails the release if this drifts from the git tag
 
-Use `./release.sh` to update both automatically.
+Use `./release.sh` to update the first two automatically; `package.json` is manual.
 
 ## Skill Files
 
@@ -132,13 +133,14 @@ Static single-file page. Dark theme with glassmorphism design, CSS variables for
 
 When releasing a new version, these files must all be updated:
 1. `ccm.sh` line 9: `readonly CCM_VERSION="X.Y.Z"`
-2. `CHANGELOG.md`: new `## [X.Y.Z]` section
-3. `README.md`: new features/commands
-4. `ccm/SKILL.md`: new commands, triggers, workflows (then copy to `.agents/skills/ccm/`)
-5. `index.html`: feature cards, command accordion, terminal demos
-6. `statusline.sh`: if statusline script changed (keep in sync with heredoc in ccm.sh)
-7. `CLAUDE.md`: update architecture section with new line ranges and modules
-8. GitHub release via `gh release create` or `./release.sh`
+2. `package.json` `"version"` — the npm publish workflow hard-fails if this does not match the tag
+3. `CHANGELOG.md`: new `## [X.Y.Z]` section
+4. `README.md`: new features/commands
+5. `ccm/SKILL.md`: new commands, triggers, workflows (then copy to `.agents/skills/ccm/`)
+6. `index.html`: feature cards, command accordion, terminal demos
+7. `statusline.sh`: if statusline script changed (keep in sync with heredoc in ccm.sh)
+8. `CLAUDE.md`: update architecture section with new line ranges and modules
+9. GitHub release via `gh release create` or `./release.sh`
 
 The `./release.sh` script only handles steps 1, 2, and 8 automatically. Steps 3–7 are manual.
 

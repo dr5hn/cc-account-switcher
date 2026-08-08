@@ -1,6 +1,6 @@
 {
   "name": "@dr5hn/ccm",
-  "version": "4.0.0",
+  "version": "4.2.1",
   "description": "CLI toolkit for managing multiple Claude Code accounts, sessions, environments, and health",
   "bin": {
     "ccm": "./ccm.sh"
