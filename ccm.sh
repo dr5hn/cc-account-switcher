@@ -2085,6 +2085,26 @@ cmd_undo() {
     perform_switch "$from_account"
 }
 
+# Purpose: Remaps project binding values from old account numbers to new ones.
+#          Extracted from cmd_reorder so the remap can be tested directly —
+#          issue #8 was a silent corruption in this expression that went
+#          unnoticed for months because nothing exercised it.
+# Parameters: $1 — sequence JSON, $2 — JSON object mapping old number -> new number
+# Returns: Prints the sequence JSON with .bindings remapped; non-zero on jq failure
+# Usage: updated_sequence=$(remap_bindings "$updated_sequence" "$map_json")
+remap_bindings() {
+    local sequence_json="$1"
+    local map_json="$2"
+
+    # NOTE: inside jq's with_entries, `.` is the {key,value} entry object, not
+    # the value. Binding `.value` (not `.`) is load-bearing — see issue #8.
+    echo "$sequence_json" | jq --argjson map "$map_json" '
+        .bindings = (.bindings // {} | with_entries(
+            .value = (.value as $v | if $map[$v | tostring] != null then ($map[$v | tostring] | tostring) else $v end)
+        ))
+    '
+}
+
 # Purpose: Reorders accounts by moving one account to a new position
 # Parameters: $1 — source position (current account number), $2 — target position
 # Returns: 0 on success, 1 on failure
@@ -2227,11 +2247,7 @@ cmd_reorder() {
     fi
 
     # Update bindings to reference new account numbers
-    updated_sequence=$(echo "$updated_sequence" | jq --argjson map "$map_json" '
-        .bindings = (.bindings // {} | with_entries(
-            .value = (.value as $v | if $map[$v | tostring] != null then ($map[$v | tostring] | tostring) else $v end)
-        ))
-    ')
+    updated_sequence=$(remap_bindings "$updated_sequence" "$map_json")
 
     # Write sequence.json FIRST — if interrupted after this point,
     # credential files can be recovered by re-running reorder
