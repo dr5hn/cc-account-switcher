@@ -2745,7 +2745,7 @@ cmd_export() {
     show_progress "Creating export archive"
 
     local temp_dir
-    temp_dir=$(mktemp -d)
+    temp_dir=$(umask 077; mktemp -d)
     trap 'rm -rf -- "$temp_dir"' EXIT
 
     # Copy sequence file
@@ -2818,7 +2818,7 @@ cmd_import() {
 
     show_progress "Extracting archive"
     local temp_dir
-    temp_dir=$(mktemp -d)
+    temp_dir=$(umask 077; mktemp -d)
     trap 'rm -rf -- "$temp_dir"' EXIT
 
     tar -xzf "$archive_path" -C "$temp_dir" 2>/dev/null || {
@@ -3027,6 +3027,12 @@ session_relocate() {
         session_files+=("$f")
     done < <(find "$new_session_dir" -name "*.jsonl" -type f -print0 2>/dev/null)
 
+    # Escape sed metacharacters — filesystem paths may legally contain | & \,
+    # any of which would corrupt the substitution expression below.
+    local sed_old sed_new
+    sed_old=$(printf '%s' "$old_path" | sed 's/[|&\\]/\\&/g')
+    sed_new=$(printf '%s' "$new_path" | sed 's/[|&\\]/\\&/g')
+
     local total_files=${#session_files[@]}
     if [[ $total_files -gt 0 ]]; then
         log_info "Updating path references in $total_files session file(s)..."
@@ -3034,8 +3040,8 @@ session_relocate() {
             ((file_index++))
             printf "\r  [%d/%d] %s" "$file_index" "$total_files" "$(basename "$session_file")"
             if grep -qF "$old_path" "$session_file" 2>/dev/null; then
-                temp_file=$(mktemp)
-                sed "s|$old_path|$new_path|g" "$session_file" > "$temp_file"
+                temp_file=$(umask 077; mktemp)
+                sed "s|$sed_old|$sed_new|g" "$session_file" > "$temp_file"
                 mv "$temp_file" "$session_file"
                 ((files_updated++))
             fi
@@ -3055,8 +3061,8 @@ session_relocate() {
             log_info "Updating ${#mem_files[@]} memory file(s)..."
             for mem_file in "${mem_files[@]}"; do
                 if grep -qF "$old_path" "$mem_file" 2>/dev/null; then
-                    temp_file=$(mktemp)
-                    sed "s|$old_path|$new_path|g" "$mem_file" > "$temp_file"
+                    temp_file=$(umask 077; mktemp)
+                    sed "s|$sed_old|$sed_new|g" "$mem_file" > "$temp_file"
                     mv "$temp_file" "$mem_file"
                     ((memory_updated++))
                 fi
@@ -3566,6 +3572,11 @@ env_restore() {
         return 1
     fi
 
+    if ! validate_snapshot_name "$name"; then
+        log_error "Invalid snapshot name. Use only letters, numbers, dots, hyphens, underscores."
+        return 1
+    fi
+
     shift
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -3740,6 +3751,12 @@ env_delete() {
 
     if [[ -z "$name" ]]; then
         log_error "Snapshot name required. Usage: ccm env delete <name>"
+        return 1
+    fi
+
+    # Guard before building the path — this function rm -rf's the result
+    if ! validate_snapshot_name "$name"; then
+        log_error "Invalid snapshot name. Use only letters, numbers, dots, hyphens, underscores."
         return 1
     fi
 
@@ -5092,7 +5109,7 @@ clean_history() {
     fi
 
     local temp_file
-    temp_file=$(mktemp "${history_file}.XXXXXX")
+    temp_file=$(umask 077; mktemp "${history_file}.XXXXXX")
     tail -n "$keep" "$history_file" > "$temp_file"
     mv "$temp_file" "$history_file"
     log_success "Removed $to_remove history entries, kept last $keep"
@@ -5341,7 +5358,7 @@ clean_all() {
             echo -e "  ${COLOR_YELLOW}${SYM_WARN}${COLOR_RESET} History: $history_lines entries ($to_remove over limit of 1000)"
             if [[ "$dry_run" -eq 0 ]]; then
                 local temp_file
-                temp_file=$(mktemp "${history_file}.XXXXXX")
+                temp_file=$(umask 077; mktemp "${history_file}.XXXXXX")
                 tail -n 1000 "$history_file" > "$temp_file"
                 mv "$temp_file" "$history_file"
                 log_step "  Trimmed history to 1000 entries (removed $to_remove)"
@@ -5579,6 +5596,11 @@ profiles_sync() {
         return 1
     fi
 
+    if ! validate_snapshot_name "$name"; then
+        log_error "Invalid profile name. Use only letters, numbers, dots, hyphens, underscores."
+        return 1
+    fi
+
     local profile_dir="$PROFILES_DIR/$name"
     if [[ ! -d "$profile_dir" ]]; then
         log_error "Profile not found: $name"
@@ -5600,6 +5622,12 @@ profiles_delete() {
     local name="${1:-}"
     if [[ -z "$name" ]]; then
         log_error "Usage: ccm profiles delete <name>"
+        return 1
+    fi
+
+    # Guard before building the path — this function rm -rf's the result
+    if ! validate_snapshot_name "$name"; then
+        log_error "Invalid profile name. Use only letters, numbers, dots, hyphens, underscores."
         return 1
     fi
 
@@ -6183,6 +6211,11 @@ session_restore() {
         return 1
     fi
 
+    if ! validate_snapshot_name "$archive_name"; then
+        log_error "Invalid archive name. Use only letters, numbers, dots, hyphens, underscores."
+        return 1
+    fi
+
     local archive_path="$ARCHIVES_DIR/$archive_name"
     if [[ ! -f "$archive_path" ]]; then
         log_error "Archive not found: $archive_name"
@@ -6190,8 +6223,21 @@ session_restore() {
         return 1
     fi
 
+    # Reject absolute paths and parent-directory traversal before extracting.
+    # Without this a crafted archive could write anywhere the user can write.
+    if tar tzf "$archive_path" 2>/dev/null | grep -qE '^/|(^|/)\.\.(/|$)'; then
+        log_error "Archive contains absolute or traversing paths — refusing to extract."
+        return 1
+    fi
+
+    mkdir -p "$CLAUDE_PROJECTS_DIR"
+
     show_progress "Restoring sessions from $archive_name"
-    tar xzf "$archive_path" 2>/dev/null
+    if ! tar xzf "$archive_path" -C "$CLAUDE_PROJECTS_DIR" 2>/dev/null; then
+        complete_progress
+        log_error "Failed to extract archive: $archive_name"
+        return 1
+    fi
     complete_progress
     log_success "Restored sessions from $archive_name"
 }
