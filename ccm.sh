@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Configuration
-readonly CCM_VERSION="4.2.1"
+readonly CCM_VERSION="4.2.2"
 readonly BACKUP_DIR="$HOME/.claude-switch-backup"
 readonly SEQUENCE_FILE="$BACKUP_DIR/sequence.json"
 readonly SCHEMA_VERSION="3.1"
@@ -4235,6 +4235,41 @@ usage_history() {
     printf "  ${COLOR_BOLD}Grand total:           %s${COLOR_RESET}\n" "$(printf '%'\''d' "$grand_total" 2>/dev/null || echo "$grand_total")"
 }
 
+# Purpose: Returns Claude API list pricing per 1M tokens for a model
+# Parameters: $1 — model id as it appears in session JSONL (e.g. claude-fable-5)
+# Returns: Prints "input|output|cache_read|cache_write"; returns 1 if unknown
+# Usage: pricing=$(claude_model_pricing "$model") || pricing=""
+# Note: Matches on model family, not exact dated ids — Claude Code writes both
+#       bare ids (claude-fable-5) and dated ones (claude-sonnet-4-5-20250514).
+#       Rates from https://platform.claude.com/docs/en/about-claude/pricing
+claude_model_pricing() {
+    local model="$1"
+    case "$model" in
+        claude-fable-5*|claude-mythos-5*)
+            echo "10|50|1|12.50" ;;
+        claude-opus-4-1*|claude-opus-4-20*)
+            # Opus 4.1 and Opus 4 — retired, kept for historical sessions
+            echo "15|75|1.50|18.75" ;;
+        claude-opus-5*|claude-opus-4-8*|claude-opus-4-7*|claude-opus-4-6*|claude-opus-4-5*)
+            echo "5|25|0.50|6.25" ;;
+        claude-sonnet-5*)
+            # Introductory pricing runs through 2026-08-31, then $3/$15
+            if [[ "$(date -u +%Y%m%d)" -le 20260831 ]]; then
+                echo "2|10|0.20|2.50"
+            else
+                echo "3|15|0.30|3.75"
+            fi ;;
+        claude-sonnet-*)
+            echo "3|15|0.30|3.75" ;;
+        claude-haiku-3-5*)
+            echo "0.80|4|0.08|1" ;;
+        claude-haiku-*)
+            echo "1|5|0.10|1.25" ;;
+        *)
+            return 1 ;;
+    esac
+}
+
 # Purpose: Shows per-session token usage and estimated cost for a project
 # Parameters: [--project <path>] [--days N] [--limit N]
 # Returns: 0
@@ -4300,14 +4335,8 @@ usage_sessions() {
     local cutoff_seconds=0
     [[ "$days" -gt 0 ]] && cutoff_seconds=$((days * 86400))
 
-    # Model pricing (per 1M tokens, USD)
-    # Format: input|output|cache_read
-    declare -A MODEL_PRICING
-    MODEL_PRICING["claude-opus-4-6"]="15|75|1.875"
-    MODEL_PRICING["claude-opus-4-5-20250414"]="15|75|1.875"
-    MODEL_PRICING["claude-sonnet-4-6"]="3|15|0.30"
-    MODEL_PRICING["claude-sonnet-4-5-20250514"]="3|15|0.30"
-    MODEL_PRICING["claude-haiku-4-5-20251001"]="0.80|4|0.08"
+    # Pricing now comes from claude_model_pricing(), which matches on model
+    # family rather than exact dated ids — see that function for rates.
 
     local session_data=()
     local grand_input=0 grand_output=0 grand_cache=0 grand_msgs=0
@@ -4336,7 +4365,11 @@ usage_sessions() {
                 output: (map(.message.usage.output_tokens // 0) | add // 0),
                 cache_create: (map(.message.usage.cache_creation_input_tokens // 0) | add // 0),
                 cache_read: (map(.message.usage.cache_read_input_tokens // 0) | add // 0),
-                model: ([.[] | .message.model // .model // empty] | first // "unknown"),
+                # Skip placeholders like "<synthetic>" that Claude Code writes for
+                # synthetic/error messages — one of them first in a session would
+                # otherwise make the whole session unpriceable.
+                model: ([.[] | .message.model // .model // empty
+                         | select(startswith("<") | not)] | first // "unknown"),
                 first_ts: ([.[].timestamp // empty] | first // ""),
                 last_ts: ([.[].timestamp // empty] | last // "")
             }
@@ -4360,15 +4393,18 @@ usage_sessions() {
 
         # Calculate cost using model pricing
         local cost_cents=0
-        local pricing="${MODEL_PRICING[$model]:-}"
-        if [[ -n "$pricing" ]]; then
-            IFS='|' read -r price_in price_out price_cache <<< "$pricing"
-            # Cost in cents: (tokens / 1M) * price_per_M * 100
-            local cost_in cost_out cost_cr
-            cost_in=$(awk -v t="$((input + cc))" -v p="$price_in" 'BEGIN{printf "%.0f", (t / 1000000) * p * 100}')
-            cost_out=$(awk -v t="$output" -v p="$price_out" 'BEGIN{printf "%.0f", (t / 1000000) * p * 100}')
-            cost_cr=$(awk -v t="$cr" -v p="$price_cache" 'BEGIN{printf "%.0f", (t / 1000000) * p * 100}')
-            cost_cents=$((cost_in + cost_out + cost_cr))
+        local pricing
+        if pricing=$(claude_model_pricing "$model"); then
+            local price_in price_out price_cache price_cw
+            IFS='|' read -r price_in price_out price_cache price_cw <<< "$pricing"
+            # Cache WRITES are billed at 1.25x base input, not at base — pricing
+            # them as plain input understates a Claude Code session noticeably.
+            local cost_in cost_out cost_cr cost_cw
+            cost_in=$(awk -v t="$input"  -v p="$price_in"    'BEGIN{printf "%.0f", (t / 1000000) * p * 100}')
+            cost_out=$(awk -v t="$output" -v p="$price_out"   'BEGIN{printf "%.0f", (t / 1000000) * p * 100}')
+            cost_cr=$(awk -v t="$cr"     -v p="$price_cache"  'BEGIN{printf "%.0f", (t / 1000000) * p * 100}')
+            cost_cw=$(awk -v t="$cc"     -v p="$price_cw"     'BEGIN{printf "%.0f", (t / 1000000) * p * 100}')
+            cost_cents=$((cost_in + cost_out + cost_cr + cost_cw))
         fi
 
         # Calculate duration from first to last timestamp
@@ -7015,9 +7051,12 @@ codex_read_limits() {
     local usage model
     usage=$(jq -c 'select(.payload.info.total_token_usage != null)
                    | {session_total:  .payload.info.total_token_usage.total_tokens,
+                      input:          (.payload.info.total_token_usage.input_tokens // 0),
+                      cached_input:   (.payload.info.total_token_usage.cached_input_tokens // 0),
+                      output:         (.payload.info.total_token_usage.output_tokens // 0),
                       context_used:   (.payload.info.last_token_usage.total_tokens // 0),
                       context_window: .payload.info.model_context_window}' "$rollout" 2>/dev/null | tail -1)
-    [[ -n "$usage" ]] || usage='{"session_total":0,"context_used":0,"context_window":0}'
+    [[ -n "$usage" ]] || usage='{"session_total":0,"input":0,"cached_input":0,"output":0,"context_used":0,"context_window":0}'
 
     model=$(jq -r 'select(.type == "turn_context") | .payload.model // empty' "$rollout" 2>/dev/null | tail -1)
     [[ -n "$model" ]] || model="unknown"
@@ -7042,6 +7081,22 @@ codex_read_limits() {
             updated_at: $now
         }
     '
+}
+
+# Purpose: Returns OpenAI API list pricing per 1M tokens for a Codex model
+# Parameters: $1 — model id as reported by Codex (e.g. gpt-5.6-sol)
+# Returns: Prints "input|cached_input|output"; returns 1 if unknown
+# Usage: pricing=$(codex_model_pricing "$model") || pricing=""
+# Note: Rates from https://developers.openai.com/api/docs/pricing
+codex_model_pricing() {
+    case "$1" in
+        gpt-5.6-sol*|gpt-5.5*)  echo "5.00|0.50|30.00" ;;
+        gpt-5.6-terra*)         echo "2.00|0.20|12.00" ;;
+        gpt-5.6-luna*)          echo "0.20|0.02|1.20" ;;
+        gpt-5.3-codex*)         echo "1.75|0.175|14.00" ;;
+        gpt-5.1*)               echo "1.25|0.125|10.00" ;;
+        *)                      return 1 ;;
+    esac
 }
 
 # Purpose: Formats a Unix epoch as local time, cross-platform
@@ -7102,6 +7157,23 @@ codex_status() {
             "$(format_token_count "$ctx_used")" "$(format_token_count "$ctx_win")" "$ctx_pct"
     fi
     printf "  %-12s %s (cumulative, incl. cache reads)\n" "Session:" "$(format_token_count "$session_total")"
+
+    # Estimated session cost at OpenAI list prices. Codex plan subscribers are
+    # not billed per token, so this is what the same usage would cost on the API.
+    local pricing
+    if pricing=$(codex_model_pricing "$model"); then
+        local p_in p_cached p_out tok_in tok_cached tok_out uncached cost
+        IFS='|' read -r p_in p_cached p_out <<< "$pricing"
+        tok_in=$(echo "$data" | jq -r '.tokens.input')
+        tok_cached=$(echo "$data" | jq -r '.tokens.cached_input')
+        tok_out=$(echo "$data" | jq -r '.tokens.output')
+        uncached=$(( tok_in > tok_cached ? tok_in - tok_cached : 0 ))
+        cost=$(awk -v u="$uncached" -v c="$tok_cached" -v o="$tok_out" \
+                   -v pi="$p_in" -v pc="$p_cached" -v po="$p_out" \
+               'BEGIN{printf "%.2f", (u*pi + c*pc + o*po) / 1000000}')
+        printf "  %-12s \$%s (at API list price, estimated)\n" "Est. cost:" "$cost"
+    fi
+
     printf "  %-12s %s\n" "Credits:" "$balance"
     echo ""
     log_info "Snapshot written to $CODEX_LIMITS_FILE"

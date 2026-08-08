@@ -2,6 +2,18 @@
 
 All notable changes to CCM (Claude Code Manager) will be documented in this file.
 
+## [4.2.2] - 2026-08-08
+
+### Fixed
+- Cost estimates in `ccm usage sessions` were wrong or missing for every current model. The pricing table had no entry for `claude-fable-5` — the model Claude Code actually writes today — so recent sessions reported **$0.00**. Two of the five entries it did have were also incorrect: Opus 4.6 was priced at the retired Opus 4.1 rate ($15/$75 instead of $5/$25), and Haiku 4.5 at the Haiku 3.5 rate ($0.80/$4 instead of $1/$5).
+- A single `<synthetic>` placeholder message — which Claude Code writes for synthetic and error entries — made an entire session unpriceable, because the model was taken from the first message rather than the first real one. Placeholder models are now skipped.
+- Cache *writes* were billed at the base input rate. They cost 1.25x base, which materially understated Claude Code sessions given how cache-heavy they are.
+
+### Added
+- `ccm codex status` now estimates session cost at OpenAI list prices, splitting cached from uncached input. Shown only for models with known pricing; Codex plan subscribers aren't billed per token, so it answers "what would this usage cost on the API".
+- Pricing now resolves by model family instead of exact ids, so dated variants like `claude-sonnet-4-5-20250514` match. Previously only the five hardcoded strings did.
+- `tests/pricing.bats` — 17 tests covering both pricing tables, including guards that cache writes cost more than cache reads and that cached input is cheaper than base input.
+
 ## [4.2.1] - 2026-08-08
 
 ### Fixed
