@@ -172,8 +172,17 @@ fi
 
 # ── CCM account data (direct file read + env var fallback) ──
 SEQ="$HOME/.claude-switch-backup/sequence.json"
-CONF="$HOME/.claude/.claude.json"
-[[ -f "$CONF" ]] || CONF="$HOME/.claude.json"
+# Resolve the config file for the ACTIVE session. When running in an isolated
+# profile, CLAUDE_CONFIG_DIR points at that profile's dir, whose .claude.json
+# holds the real active account. Prefer it so the statusline reflects the
+# profile in use rather than whatever account is globally active.
+if [[ -n "$CLAUDE_CONFIG_DIR" ]] && [[ -f "$CLAUDE_CONFIG_DIR/.claude.json" ]]; then
+    CONF="$CLAUDE_CONFIG_DIR/.claude.json"
+elif [[ -f "$HOME/.claude/.claude.json" ]]; then
+    CONF="$HOME/.claude/.claude.json"
+else
+    CONF="$HOME/.claude.json"
+fi
 
 ALIAS="" EMAIL_SHORT="" HEALTH="" TOTAL_ACCTS=0
 if [[ -f "$SEQ" ]] && [[ -f "$CONF" ]]; then
