@@ -7177,6 +7177,10 @@ codex_status() {
     printf "  %-12s %s\n" "Credits:" "$balance"
     echo ""
     log_info "Snapshot written to $CODEX_LIMITS_FILE"
+
+    # Explicit: the status of whichever printf/conditional ran last must not
+    # leak out as this command's exit code. Reaching here means success.
+    return 0
 }
 
 # Purpose: Routes `ccm codex` subcommands
