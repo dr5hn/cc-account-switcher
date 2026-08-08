@@ -311,6 +311,47 @@ h1{font-size:28px;margin-bottom:8px;background:linear-gradient(135deg,#e2e8f0,#3
     </div>
 </div>
 
+<div class="section">Codex CLI</div>
+<div class="scenario">
+    <div class="scenario-title">Why there is no Codex statusline</div>
+    <div class="scenario-note" style="margin-top:0;margin-bottom:16px">
+        Claude Code lets you point <span class="c-cyan">statusLine</span> at any command and renders its stdout.
+        Codex has no equivalent — its <span class="c-cyan">tui.status_line</span> is an ordered list of
+        <em>built-in</em> footer identifiers, not a script to run, so nothing can inject custom content into
+        the Codex footer. CCM reads Codex's own session rollout files instead and surfaces the same data as a
+        command. It never writes to <span class="c-cyan">~/.codex</span>.
+    </div>
+    <div class="scenario-terminal" style="line-height:2.2">
+        <div><span class="c-dim">$</span> <span class="c-white">ccm codex status</span></div>
+        <div style="margin-top:10px"><span class="c-white">Codex Usage</span></div>
+        <div><span class="c-dim">&nbsp;&nbsp;Plan:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="c-white">plus</span></div>
+        <div><span class="c-dim">&nbsp;&nbsp;Model:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="c-cyan">gpt-5.6-sol</span></div>
+        <div><span class="c-dim">&nbsp;&nbsp;Rate limit:&nbsp;&nbsp;</span><span class="c-green">42.5%</span><span class="c-dim"> used (10080 min window)</span></div>
+        <div><span class="c-dim">&nbsp;&nbsp;Resets at:&nbsp;&nbsp;&nbsp;</span><span class="c-white">2026-08-13 12:15</span></div>
+        <div><span class="c-dim">&nbsp;&nbsp;Context:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="c-white">163K / 258K</span> <span class="c-green">(63%)</span></div>
+        <div><span class="c-dim">&nbsp;&nbsp;Session:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="c-white">194.6M</span><span class="c-dim"> (cumulative, incl. cache reads)</span></div>
+        <div><span class="c-dim">&nbsp;&nbsp;Credits:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="c-white">390.47</span></div>
+    </div>
+    <div class="scenario-note">
+        <strong>Context</strong> is the last turn measured against the model's window — what actually fills it.
+        <strong>Session</strong> is cumulative spend for the whole session and is dominated by cache reads, so it
+        routinely exceeds the context window. Conflating the two is the easy mistake here.
+    </div>
+</div>
+
+<div class="scenario">
+    <div class="scenario-title">Where else Codex shows up</div>
+    <div class="scenario-terminal" style="line-height:2.2">
+        <div><span class="c-dim">$</span> <span class="c-white">ccm watch status</span></div>
+        <div><span class="c-dim">&nbsp;&nbsp;...</span></div>
+        <div><span class="c-white">&nbsp;&nbsp;Codex</span></div>
+        <div><span class="c-dim">&nbsp;&nbsp;&nbsp;&nbsp;Rate limit: </span><span class="c-green">42.5%</span><span class="c-dim"> used (plan: plus)</span></div>
+        <div style="margin-top:10px"><span class="c-dim">$</span> <span class="c-white">ccm doctor</span></div>
+        <div><span class="c-green">&nbsp;&nbsp;[ok]</span><span class="c-white">&nbsp;Codex CLI&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="c-dim">Detected — rate limit 42.5% used</span></div>
+    </div>
+    <div class="scenario-note">Both stay completely silent when Codex isn't installed, and the doctor line never counts toward the issue total — a busy Codex plan is not a CCM health problem.</div>
+</div>
+
 <div class="section">Install / Uninstall</div>
 <div class="scenario">
     <div class="scenario-terminal" style="line-height:2.4">
