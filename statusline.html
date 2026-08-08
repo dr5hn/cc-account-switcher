@@ -6,8 +6,21 @@
 <title>Claude Code Statusline — Visual Guide</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#0a0f1a;color:#e2e8f0;font-family:'Inter',-apple-system,system-ui,sans-serif;line-height:1.6;padding:40px 20px}
-.container{max-width:900px;margin:0 auto}
+body{background:#0a0f1a;color:#e2e8f0;font-family:'Inter',-apple-system,system-ui,sans-serif;line-height:1.6}
+.container{max-width:900px;margin:0 auto;padding:40px 20px}
+
+/* Sticky site navigation — matches index.html */
+.site-nav{position:sticky;top:0;z-index:100;display:flex;align-items:center;gap:28px;padding:14px 28px;background:rgba(10,15,26,0.82);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid rgba(255,255,255,0.06)}
+.site-nav a{color:#94a3b8;text-decoration:none;font-size:14px;font-weight:500;transition:color .2s ease}
+.site-nav a:hover{color:#38bdf8}
+.site-nav .nav-brand{font-family:'JetBrains Mono',monospace;font-weight:700;color:#e2e8f0;margin-right:auto;letter-spacing:.05em}
+.site-nav .nav-cta{color:#38bdf8;border:1px solid rgba(56,189,248,0.35);border-radius:6px;padding:5px 14px}
+.site-nav .nav-cta:hover{background:rgba(56,189,248,0.1)}
+@media (max-width:768px){
+  .site-nav{gap:14px;padding:12px 14px;flex-wrap:wrap;justify-content:center}
+  .site-nav .nav-brand{margin-right:0;width:100%;text-align:center;margin-bottom:4px}
+  .site-nav a{font-size:13px}
+}
 h1{font-size:28px;margin-bottom:8px;background:linear-gradient(135deg,#e2e8f0,#38bdf8,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .subtitle{color:#94a3b8;font-size:14px;margin-bottom:40px}
 .install-box{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:20px 24px;margin-bottom:40px;display:flex;align-items:center;justify-content:space-between;gap:16px}
@@ -71,6 +84,14 @@ h1{font-size:28px;margin-bottom:8px;background:linear-gradient(135deg,#e2e8f0,#3
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
+<nav class="site-nav">
+  <a href="index.html" class="nav-brand">CCM</a>
+  <a href="index.html#features">Features</a>
+  <a href="index.html#commands">Commands</a>
+  <a href="statusline.html">Statusline</a>
+  <a href="index.html#install">Install</a>
+  <a href="https://github.com/dr5hn/ccm" target="_blank" rel="noopener" class="nav-cta">GitHub</a>
+</nav>
 <div class="container">
 
 <h1>Claude Code Statusline</h1>
