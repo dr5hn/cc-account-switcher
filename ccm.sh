@@ -2229,7 +2229,7 @@ cmd_reorder() {
     # Update bindings to reference new account numbers
     updated_sequence=$(echo "$updated_sequence" | jq --argjson map "$map_json" '
         .bindings = (.bindings // {} | with_entries(
-            .value = (. as $v | if $map[$v | tostring] != null then ($map[$v | tostring] | tostring) else $v end)
+            .value = (.value as $v | if $map[$v | tostring] != null then ($map[$v | tostring] | tostring) else $v end)
         ))
     ')
 
