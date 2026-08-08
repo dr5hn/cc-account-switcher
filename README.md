@@ -24,12 +24,12 @@ CCM is a single bash script that fixes all of this — and it's the only tool th
 | Feature | CCM | Cloak | aisw | Usage Monitor | Native CC |
 |---------|-----|-------|------|---------------|-----------|
 | Multi-account management | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Concurrent sessions | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Per-terminal config isolation | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Project-account bindings | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Auto rate-limit switch | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Per-account usage tracking | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Session cleanup (9 targets) | ✅ | ❌ | ❌ | ❌ | Buggy |
-| Health checks (13 checks) | ✅ | ❌ | ❌ | ❌ | MCP only |
+| Health checks (14 checks) | ✅ | ❌ | ❌ | ❌ | MCP only |
 | Environment snapshots | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Permissions audit | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Session archive/restore | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -59,12 +59,19 @@ CCM addresses the most upvoted feature requests in [anthropics/claude-code](http
 - **Account aliases** — friendly names like `work` or `personal` for quick access
 - **Account reorder** — rearrange account positions with automatic credential renaming
 - **Project bindings** — bind directories to accounts, auto-switch with `ccm switch`
-- **Shell hook** — `eval "$(ccm hook)"` auto-switches accounts when you `cd` into bound directories (zero per-cd overhead). Use `eval "$(ccm hook --isolated)"` for per-shell `CLAUDE_CONFIG_DIR` isolation so concurrent terminals don't clobber each other
+- **Shell hook** — `eval "$(ccm hook)"` auto-switches accounts when you `cd` into bound directories (zero per-cd overhead). Use `eval "$(ccm hook --isolated)"` for per-shell `CLAUDE_CONFIG_DIR` config isolation
 - **Switch history and undo** — track switches and revert instantly
 - **Health verification** — validate backup integrity for all accounts
 - **Export/Import** — backup and restore account configurations as portable archives
-- **Concurrent sessions** — `ccm switch --isolated <account>` for true CLAUDE_CONFIG_DIR-based concurrent sessions in different terminals
+- **Per-terminal config** — `ccm switch --isolated <account>` gives each terminal its own `CLAUDE_CONFIG_DIR` config and session history
 - **Profile management** — `ccm profiles list|sync|delete` for isolated profile directories
+
+> **Note on credentials.** `--isolated` separates config and session history, but **not credentials**.
+> Claude Code reads credentials from the macOS Keychain (ignoring `CLAUDE_CONFIG_DIR`) and from
+> `~/.claude/.credentials.json` on Linux/WSL, so concurrent sessions still share one token and a
+> refresh in one can invalidate the other. This is an upstream limitation, tracked in
+> [anthropics/claude-code#70697](https://github.com/anthropics/claude-code/issues/70697) and
+> [anthropics/claude-code#47661](https://github.com/anthropics/claude-code/issues/47661).
 
 ### Session Management
 - **Session listing** — view all Claude Code project sessions with size and age
@@ -95,7 +102,7 @@ CCM addresses the most upvoted feature requests in [anthropics/claude-code](http
 - **MCP audit** — flag MCP servers with CLI alternatives to save tokens
 
 ### Health & Maintenance
-- **Doctor** — 13 health checks: stale locks, log bloat, cache, telemetry, todos, paste cache, file history, shell snapshots, orphaned sessions, total disk size, tmp files, orphaned processes, hook async config
+- **Doctor** — 14 health checks: stale locks, log bloat, cache, telemetry, todos, paste cache, file history, shell snapshots, orphaned sessions, total disk size, tmp files, orphaned processes, hook async config
 - **Clean** — targeted cleanup for debug logs, telemetry, todos, cache, history, tmp output files, orphaned processes
 - **Permissions audit** — find duplicate, contradictory, and dead permission rules in settings.json
 - **Auto-fix** — `ccm doctor --fix` and `ccm permissions audit --fix` resolve safe issues automatically
@@ -212,7 +219,7 @@ ccm setup                      # Interactive first-run setup wizard
 ccm add                        # Add current Claude Code account
 ccm remove <id>                # Remove by number, email, or alias
 ccm switch [id]                # Switch to next, specific, or project-bound account
-ccm switch --isolated <id>     # Switch with isolated CLAUDE_CONFIG_DIR for concurrent sessions
+ccm switch --isolated <id>     # Switch with isolated CLAUDE_CONFIG_DIR (config + history)
 ccm undo                       # Revert to the previous account
 ccm list                       # List all managed accounts and bindings
 ccm alias <id> <name>          # Set a friendly alias
@@ -221,7 +228,7 @@ ccm bind [path] <account>      # Bind project directory to an account
 ccm unbind [path]              # Remove project binding
 ccm bind list                  # Show all project bindings
 ccm hook                       # Output shell hook for auto-switch on cd (global mode)
-ccm hook --isolated            # Hook that sets CLAUDE_CONFIG_DIR per-shell (concurrent-terminal safe)
+ccm hook --isolated            # Hook that sets CLAUDE_CONFIG_DIR per-shell (config isolation)
 ccm verify [id]                # Verify backup integrity
 ccm history                    # View switch history
 ccm export <path>              # Export accounts to archive
@@ -230,6 +237,7 @@ ccm profiles list              # List isolated profile directories
 ccm profiles sync <id>         # Sync profile with main config
 ccm profiles delete <id>       # Delete an isolated profile
 ccm recover                    # Detect and fix inconsistent credential state
+ccm codex status               # Show Codex CLI rate limits, plan, and token usage
 ```
 
 ### Session Management
@@ -288,7 +296,7 @@ ccm env audit                          # Audit MCP servers for token efficiency
 ### Health & Maintenance
 
 ```bash
-ccm doctor                             # 13 health checks
+ccm doctor                             # 14 health checks
 ccm doctor --fix                       # Auto-fix safe issues
 ccm clean debug [--days N]             # Clean debug logs (default: 30 days)
 ccm clean telemetry                    # Remove telemetry data
@@ -380,7 +388,7 @@ ccm session search "API" --limit 5    # limit results
 <img src="demos/02-doctor.gif" alt="CCM doctor health check demo" width="700">
 
 ```bash
-ccm doctor             # 13 health checks
+ccm doctor             # 14 health checks
 ccm doctor --fix       # auto-fix safe issues
 ccm clean tmp          # clean orphaned tmp output files
 ccm clean processes    # kill leaked subagent processes
@@ -413,7 +421,7 @@ CCM focuses on account management, operational health, and environment portabili
 | [ccmanager](https://github.com/kbwo/ccmanager) | Multi-agent session orchestration | 900+ |
 
 **What only CCM does:**
-- Concurrent sessions with isolated CLAUDE_CONFIG_DIR profiles
+- Per-terminal config + history via isolated CLAUDE_CONFIG_DIR profiles
 - Auto rate-limit switching across accounts
 - Per-account usage tracking and comparison dashboard
 - Project-to-account bindings with shell hook auto-switch

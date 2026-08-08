@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Configuration
-readonly CCM_VERSION="4.2.0"
+readonly CCM_VERSION="4.2.1"
 readonly BACKUP_DIR="$HOME/.claude-switch-backup"
 readonly SEQUENCE_FILE="$BACKUP_DIR/sequence.json"
 readonly SCHEMA_VERSION="3.1"
@@ -3189,7 +3189,7 @@ show_help() {
             echo "  delete <name>            Remove an isolated profile"
             echo ""
             echo "Profiles are created via 'ccm switch --isolated <account>'."
-            echo "Each profile uses CLAUDE_CONFIG_DIR for true concurrent sessions."
+            echo "Each profile has its own CLAUDE_CONFIG_DIR config and history."
             echo ""
             echo -e "${COLOR_BOLD}Examples:${COLOR_RESET}"
             echo "  ccm switch --isolated work     # create and activate profile"
@@ -6944,29 +6944,51 @@ STATUSLINE_EOF
 readonly CODEX_DIR="$HOME/.codex"
 readonly CODEX_LIMITS_FILE="$BACKUP_DIR/codex-limits.json"
 
-# Purpose: Finds the most recently modified Codex session rollout file
-# Parameters: None
-# Returns: Prints the rollout path; returns 1 when Codex or its sessions are absent
-# Usage: rollout=$(codex_latest_rollout) || return 1
-codex_latest_rollout() {
+# Purpose: Lists Codex session rollout files, newest first
+# Parameters: $1 — how many to list (default 10)
+# Returns: Prints one rollout path per line; returns 1 when Codex or its
+#          sessions are absent, or no rollouts exist
+# Usage: while read -r f; do ...; done < <(codex_rollouts 5)
+codex_rollouts() {
+    local limit="${1:-10}"
     local sessions_dir="$CODEX_DIR/sessions"
     [[ -d "$sessions_dir" ]] || return 1
 
-    local platform latest
+    local platform out
     platform=$(detect_platform)
 
-    # stat flags differ by platform; -exec ... + avoids an argv overflow that
+    # stat flags differ by platform; -exec ... + avoids the argv overflow that
     # `ls -t` hits once a user accumulates thousands of rollouts.
     if [[ "$platform" == "macos" ]]; then
-        latest=$(find "$sessions_dir" -name 'rollout-*.jsonl' -type f \
-                 -exec stat -f '%m %N' {} + 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+        out=$(find "$sessions_dir" -name 'rollout-*.jsonl' -type f \
+              -exec stat -f '%m %N' {} + 2>/dev/null | sort -rn | head -n "$limit" | cut -d' ' -f2-)
     else
-        latest=$(find "$sessions_dir" -name 'rollout-*.jsonl' -type f \
-                 -exec stat -c '%Y %n' {} + 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+        out=$(find "$sessions_dir" -name 'rollout-*.jsonl' -type f \
+              -exec stat -c '%Y %n' {} + 2>/dev/null | sort -rn | head -n "$limit" | cut -d' ' -f2-)
     fi
 
-    [[ -n "$latest" && -f "$latest" ]] || return 1
-    echo "$latest"
+    [[ -n "$out" ]] || return 1
+    echo "$out"
+}
+
+# Purpose: Finds the newest rollout that actually contains rate limit data
+# Parameters: None
+# Returns: Prints the rollout path; returns 1 when none of the recent
+#          rollouts carry rate_limits
+# Usage: rollout=$(codex_latest_rollout) || return 1
+# Note: The newest rollout is often a session that has not completed a turn
+#       yet, so it has no rate_limits record. Falling back through recent
+#       rollouts keeps the reading stable while a Codex session is starting.
+codex_latest_rollout() {
+    local f
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        if jq -e 'select(.payload.rate_limits != null)' "$f" >/dev/null 2>&1; then
+            echo "$f"
+            return 0
+        fi
+    done < <(codex_rollouts 10)
+    return 1
 }
 
 # Purpose: Reads the newest Codex rollout and emits normalised usage JSON

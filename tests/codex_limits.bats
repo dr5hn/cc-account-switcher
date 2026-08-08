@@ -107,6 +107,35 @@ JSONL
     [ "$(echo "$output" | jq -r '.primary.used_percentage == 12.5')" = "true" ]
 }
 
+@test "falls back past a brand-new rollout that has no rate_limits yet" {
+    # A Codex session that has not completed a turn writes a rollout with no
+    # rate_limits record. Reading only the newest file would report "no data"
+    # even though a usable reading sits in the previous session.
+    write_rollout "$ROLLOUT_DIR/rollout-has-data.jsonl"
+    printf '{"type":"turn_context","payload":{"model":"gpt-5.6-sol"}}\n' \
+        > "$ROLLOUT_DIR/rollout-just-started.jsonl"
+    touch -t 202601010000 "$ROLLOUT_DIR/rollout-has-data.jsonl"
+
+    run codex_latest_rollout
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rollout-has-data.jsonl" ]]
+
+    run codex_read_limits
+    [ "$status" -eq 0 ]
+    [ "$(echo "$output" | jq -r '.plan_type')" = "plus" ]
+}
+
+@test "gives up when no recent rollout carries rate limit data" {
+    mkdir -p "$ROLLOUT_DIR"
+    for n in a b c; do
+        printf '{"type":"turn_context","payload":{"model":"m"}}\n' > "$ROLLOUT_DIR/rollout-$n.jsonl"
+    done
+    run codex_latest_rollout
+    [ "$status" -ne 0 ]
+    run codex_read_limits
+    [ "$status" -ne 0 ]
+}
+
 @test "tolerates a rollout missing last_token_usage" {
     mkdir -p "$ROLLOUT_DIR"
     cat > "$ROLLOUT_DIR/rollout-partial.jsonl" <<'JSONL'

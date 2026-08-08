@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CCM — Claude Code Manager</title>
-<meta name="description" content="The power-user toolkit for Claude Code v4.0. Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival, setup wizard — plus multi-account management, project bindings, and disk cleanup. Open source CLI for macOS, Linux, WSL.">
+<meta name="description" content="The power-user toolkit for Claude Code v4.2. Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival, setup wizard — plus multi-account management, project bindings, and disk cleanup. Open source CLI for macOS, Linux, WSL.">
 <meta name="keywords" content="Claude Code, account manager, CLI tool, multi-account, session management, token usage, environment snapshots, token optimization, developer tools, project bindings">
 <meta name="author" content="Darshan Gada">
 <link rel="canonical" href="https://github.com/dr5hn/ccm">
@@ -12,7 +12,7 @@
 <!-- Open Graph -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="CCM — Claude Code Manager">
-<meta property="og:description" content="CCM v4.0 — concurrent sessions, rate limit auto-switch, per-account dashboards, session archival. Manage multiple Claude Code accounts from one terminal.">
+<meta property="og:description" content="CCM v4.2 — concurrent sessions, rate limit auto-switch, per-account dashboards, session archival. Manage multiple Claude Code accounts from one terminal.">
 <meta property="og:image" content="https://raw.githubusercontent.com/dr5hn/ccm/main/og-image.svg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -22,7 +22,7 @@
 <!-- Twitter Card -->
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="CCM — Claude Code Manager">
-<meta name="twitter:description" content="CCM v4.0 — concurrent sessions, rate limit auto-switch, per-account dashboards, session archival. The power-user toolkit for Claude Code.">
+<meta name="twitter:description" content="CCM v4.2 — concurrent sessions, rate limit auto-switch, per-account dashboards, session archival. The power-user toolkit for Claude Code.">
 <meta name="twitter:image" content="https://raw.githubusercontent.com/dr5hn/ccm/main/og-image.svg">
 
 <!-- Structured Data -->
@@ -31,7 +31,7 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "CCM — Claude Code Manager",
-  "description": "CCM v4.0 — the power-user toolkit for Claude Code. Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival, setup wizard, plus multi-account management from the terminal.",
+  "description": "CCM v4.2 — the power-user toolkit for Claude Code. Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival, setup wizard, plus multi-account management from the terminal.",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, WSL",
   "offers": {
@@ -1059,7 +1059,7 @@ body {
         <div class="feature-icon">⊕</div>
         <div class="feature-name">Health &amp; Maintenance</div>
         <div class="feature-cmd">ccm doctor</div>
-        <div class="feature-desc">13 health checks: disk size, tmp bloat, orphaned processes, stale locks, hook config. Auto-fix with --fix. Clean tmp files, kill leaked processes.</div>
+        <div class="feature-desc">14 health checks: disk size, tmp bloat, orphaned processes, stale locks, hook config. Auto-fix with --fix. Clean tmp files, kill leaked processes.</div>
       </div>
       <div class="feature-card glass-card">
         <div class="feature-icon">⊘</div>
@@ -1266,7 +1266,7 @@ body {
       </div>
       <div class="cmd-group-body">
         <table class="cmd-table">
-          <tr><td>ccm doctor</td><td>13 health checks (disk, tmp, processes, hooks, locks, cache)</td></tr>
+          <tr><td>ccm doctor</td><td>14 health checks (disk, tmp, processes, hooks, locks, cache)</td></tr>
           <tr><td>ccm doctor --fix</td><td>Auto-fix safe issues</td></tr>
           <tr><td>ccm clean debug [--days N]</td><td>Clean debug logs (default: 30 days)</td></tr>
           <tr><td>ccm clean telemetry</td><td>Remove telemetry data</td></tr>
@@ -1401,7 +1401,7 @@ var demos = {
     { type: 'active', text: 'i Project binding: switching to Account-2 (darshan@company.com)' },
     { type: 'success', text: '✓ Switched: personal → work' },
     { type: 'blank' },
-    { type: 'muted',  text: '# Auto-switch on cd (add to ~/.zshrc) — isolated mode is concurrent-terminal safe:' },
+    { type: 'muted',  text: '# Auto-switch on cd (add to ~/.zshrc) — isolated mode gives each shell its own config:' },
     { type: 'prompt', text: '$ ' },
     { type: 'cmd', text: 'eval "$(ccm hook --isolated)"' },
     { type: 'blank' },
