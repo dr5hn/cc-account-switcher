@@ -3229,6 +3229,22 @@ show_help() {
             echo "  Keychain entries vs sequence.json (macOS)"
             echo "  Active account vs credential state"
             echo "  Profile directory validity"
+            echo "  Project binding integrity"
+            ;;
+        codex)
+            echo -e "${COLOR_BOLD}ccm codex — OpenAI Codex CLI usage${COLOR_RESET}"
+            echo ""
+            echo "Usage: ccm codex status"
+            echo ""
+            echo "Shows Codex rate limits, plan, model, context occupancy and"
+            echo "cumulative session tokens, and writes a snapshot to"
+            echo "codex-limits.json for 'ccm watch' to read."
+            echo ""
+            echo -e "${COLOR_BOLD}How it works:${COLOR_RESET}"
+            echo "  Codex has no command-based statusline hook — its"
+            echo "  tui.status_line is a list of built-in footer items, not a"
+            echo "  script. CCM instead reads Codex's own session rollout"
+            echo "  files. It never writes to ~/.codex."
             ;;
         setup)
             echo -e "${COLOR_BOLD}ccm setup — First-Run Setup Wizard${COLOR_RESET}"
@@ -4829,6 +4845,19 @@ doctor_scan() {
         printf "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} %-24s %s\n" "Hook async config" "All hooks properly configured"
     fi
 
+    # 14. Codex CLI (informational — never counts toward $issues, since a high
+    #     Codex rate limit is not a CCM health problem, and most users have no
+    #     Codex install at all)
+    if [[ -d "$CODEX_DIR" ]]; then
+        local codex_data cpct
+        if codex_data=$(codex_read_limits); then
+            cpct=$(echo "$codex_data" | jq -r '.primary.used_percentage')
+            printf "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} %-24s %s\n" "Codex CLI" "Detected — rate limit ${cpct}% used"
+        else
+            printf "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} %-24s %s\n" "Codex CLI" "Detected — no usage data yet"
+        fi
+    fi
+
     # Summary
     echo ""
     if [[ "$issues" -eq 0 ]]; then
@@ -5833,6 +5862,21 @@ watch_status() {
     else
         echo ""
         echo -e "  Rate data: ${COLOR_YELLOW}unavailable${COLOR_RESET} (install statusline first)"
+    fi
+
+    # Codex is optional — stay silent entirely when it isn't installed
+    if [[ -d "$CODEX_DIR" ]]; then
+        echo ""
+        echo -e "  ${COLOR_BOLD}Codex${COLOR_RESET}"
+        local codex_data
+        if codex_data=$(codex_read_limits); then
+            local cpct cplan
+            cpct=$(echo "$codex_data" | jq -r '.primary.used_percentage')
+            cplan=$(echo "$codex_data" | jq -r '.plan_type')
+            echo "    Rate limit: ${cpct}% used (plan: $cplan)"
+        else
+            echo "    No usage data yet."
+        fi
     fi
     echo ""
 }
@@ -6885,6 +6929,171 @@ STATUSLINE_EOF
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Codex Module — read-only OpenAI Codex CLI usage bridge
+#
+# Codex exposes no command-based statusline hook: its `tui.status_line` is an
+# ordered list of built-in footer item identifiers, not a script to run. But it
+# already appends rate_limits and token usage to its own session rollout JSONL,
+# so we read that and mirror it into codex-limits.json — the same data-bridge
+# pattern the Claude statusline uses for rate-limits.json.
+#
+# This module is strictly read-only with respect to ~/.codex. It never writes
+# to the user's Codex config, sessions, or credentials.
+# ──────────────────────────────────────────────────────────────────────────────
+
+readonly CODEX_DIR="$HOME/.codex"
+readonly CODEX_LIMITS_FILE="$BACKUP_DIR/codex-limits.json"
+
+# Purpose: Finds the most recently modified Codex session rollout file
+# Parameters: None
+# Returns: Prints the rollout path; returns 1 when Codex or its sessions are absent
+# Usage: rollout=$(codex_latest_rollout) || return 1
+codex_latest_rollout() {
+    local sessions_dir="$CODEX_DIR/sessions"
+    [[ -d "$sessions_dir" ]] || return 1
+
+    local platform latest
+    platform=$(detect_platform)
+
+    # stat flags differ by platform; -exec ... + avoids an argv overflow that
+    # `ls -t` hits once a user accumulates thousands of rollouts.
+    if [[ "$platform" == "macos" ]]; then
+        latest=$(find "$sessions_dir" -name 'rollout-*.jsonl' -type f \
+                 -exec stat -f '%m %N' {} + 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    else
+        latest=$(find "$sessions_dir" -name 'rollout-*.jsonl' -type f \
+                 -exec stat -c '%Y %n' {} + 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+    fi
+
+    [[ -n "$latest" && -f "$latest" ]] || return 1
+    echo "$latest"
+}
+
+# Purpose: Reads the newest Codex rollout and emits normalised usage JSON
+# Parameters: None
+# Returns: Prints JSON to stdout; returns 1 when no usage data is available
+# Usage: data=$(codex_read_limits) || return 1
+codex_read_limits() {
+    local rollout
+    rollout=$(codex_latest_rollout) || return 1
+
+    # Rollouts are append-only, so the LAST record of each kind is current.
+    local rl
+    rl=$(jq -c 'select(.payload.rate_limits != null) | .payload.rate_limits' "$rollout" 2>/dev/null | tail -1)
+    [[ -n "$rl" ]] || return 1
+
+    # Codex reports two different totals and conflating them is misleading:
+    #   total_token_usage — cumulative for the whole session, dominated by
+    #                       cache reads; can far exceed the context window
+    #   last_token_usage  — the most recent turn, which is what actually
+    #                       occupies the context window
+    local usage model
+    usage=$(jq -c 'select(.payload.info.total_token_usage != null)
+                   | {session_total:  .payload.info.total_token_usage.total_tokens,
+                      context_used:   (.payload.info.last_token_usage.total_tokens // 0),
+                      context_window: .payload.info.model_context_window}' "$rollout" 2>/dev/null | tail -1)
+    [[ -n "$usage" ]] || usage='{"session_total":0,"context_used":0,"context_window":0}'
+
+    model=$(jq -r 'select(.type == "turn_context") | .payload.model // empty' "$rollout" 2>/dev/null | tail -1)
+    [[ -n "$model" ]] || model="unknown"
+
+    jq -n --argjson rl "$rl" --argjson usage "$usage" \
+          --arg model "$model" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+        {
+            primary: {
+                used_percentage: ($rl.primary.used_percent // 0),
+                window_minutes:  ($rl.primary.window_minutes // 0),
+                resets_at:       ($rl.primary.resets_at // 0)
+            },
+            secondary: (if $rl.secondary == null then null else {
+                used_percentage: ($rl.secondary.used_percent // 0),
+                window_minutes:  ($rl.secondary.window_minutes // 0),
+                resets_at:       ($rl.secondary.resets_at // 0)
+            } end),
+            credits:   ($rl.credits // null),
+            plan_type: ($rl.plan_type // "unknown"),
+            model:     $model,
+            tokens:    $usage,
+            updated_at: $now
+        }
+    '
+}
+
+# Purpose: Formats a Unix epoch as local time, cross-platform
+# Parameters: $1 — epoch seconds
+# Returns: Prints a human-readable timestamp, or "unknown" for bad input
+# Usage: format_epoch 1786603510
+format_epoch() {
+    local epoch="$1"
+    if [[ ! "$epoch" =~ ^[0-9]+$ ]] || [[ "$epoch" -eq 0 ]]; then
+        echo "unknown"
+        return
+    fi
+    date -r "$epoch" '+%Y-%m-%d %H:%M' 2>/dev/null && return
+    date -d "@$epoch" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "unknown"
+}
+
+# Purpose: Prints Codex rate limit and token usage, refreshing codex-limits.json
+# Parameters: None
+# Returns: 0 on success, 1 when Codex is not installed or has no usage data
+# Usage: codex_status
+codex_status() {
+    echo -e "${COLOR_BOLD}Codex Usage${COLOR_RESET}"
+    echo ""
+
+    if [[ ! -d "$CODEX_DIR" ]]; then
+        log_info "Codex CLI not detected (no $CODEX_DIR)."
+        return 1
+    fi
+
+    local data
+    if ! data=$(codex_read_limits); then
+        log_warning "No Codex usage data found. Start a Codex session first."
+        return 1
+    fi
+
+    write_json "$CODEX_LIMITS_FILE" "$data"
+
+    local pct window resets plan model session_total ctx_used ctx_win balance
+    pct=$(echo "$data" | jq -r '.primary.used_percentage')
+    window=$(echo "$data" | jq -r '.primary.window_minutes')
+    resets=$(echo "$data" | jq -r '.primary.resets_at')
+    plan=$(echo "$data" | jq -r '.plan_type')
+    model=$(echo "$data" | jq -r '.model')
+    session_total=$(echo "$data" | jq -r '.tokens.session_total')
+    ctx_used=$(echo "$data" | jq -r '.tokens.context_used')
+    ctx_win=$(echo "$data" | jq -r '.tokens.context_window')
+    balance=$(echo "$data" | jq -r '.credits.balance // "n/a"')
+
+    printf "  %-12s %s\n" "Plan:" "$plan"
+    printf "  %-12s %s\n" "Model:" "$model"
+    printf "  %-12s %s%% used (%s min window)\n" "Rate limit:" "$pct" "$window"
+    [[ "$resets" != "0" ]] && printf "  %-12s %s\n" "Resets at:" "$(format_epoch "$resets")"
+
+    if [[ "$ctx_win" -gt 0 ]] && [[ "$ctx_used" -gt 0 ]]; then
+        local ctx_pct
+        ctx_pct=$(awk -v u="$ctx_used" -v w="$ctx_win" 'BEGIN{printf "%.0f", (u/w)*100}')
+        printf "  %-12s %s / %s (%s%%)\n" "Context:" \
+            "$(format_token_count "$ctx_used")" "$(format_token_count "$ctx_win")" "$ctx_pct"
+    fi
+    printf "  %-12s %s (cumulative, incl. cache reads)\n" "Session:" "$(format_token_count "$session_total")"
+    printf "  %-12s %s\n" "Credits:" "$balance"
+    echo ""
+    log_info "Snapshot written to $CODEX_LIMITS_FILE"
+}
+
+# Purpose: Routes `ccm codex` subcommands
+# Parameters: $1 — subcommand (status); defaults to status
+# Returns: 0 on success, 1 on unknown subcommand or unavailable data
+# Usage: cmd_codex status
+cmd_codex() {
+    case "${1:-status}" in
+        status) codex_status ;;
+        *)      log_error "Unknown codex subcommand '${1}'"; echo "Usage: ccm codex status"; return 1 ;;
+    esac
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Init Module — Project Setup
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -7281,6 +7490,7 @@ main() {
         profiles)       shift; cmd_profiles "$@" ;;
         watch)          shift; cmd_watch "$@" ;;
         recover)        cmd_recover ;;
+        codex)          shift; cmd_codex "$@" ;;
         setup)          cmd_setup ;;
         session)        shift; cmd_session "$@" ;;
         env)            shift; cmd_env "$@" ;;
