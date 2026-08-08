@@ -1,6 +1,6 @@
 ---
 name: ccm
-description: Claude Code Manager — manage accounts, sessions, environments, and optimize token usage. Use when the user mentions switching Claude accounts, cleaning up sessions, environment snapshots, disk usage, token optimization, Claude Code health check, orphaned sessions, orphaned processes, tmp files, MCP audit, project bindings, session search, token usage history, account reorder, profiles, isolated, concurrent sessions, CLAUDE_CONFIG_DIR, isolated hook, watch, rate limit, auto-switch, dashboard, session archive, setup wizard, recover, usage dashboard, usage compare, claudeignore, permission rules, statusline, status bar, or says "ccm", "doctor", "clean cache", "clean tmp", "session list", "session search", "env snapshot", "bind", "unbind", "reorder", "usage history", "init", "permissions audit", "statusline", "ccm watch", "ccm profiles", "ccm setup", "ccm recover", "ccm hook", "hook --isolated".
+description: Claude Code Manager — manage accounts, sessions, environments, and optimize token usage. Use when the user mentions switching Claude accounts, cleaning up sessions, environment snapshots, disk usage, token optimization, Claude Code health check, orphaned sessions, orphaned processes, tmp files, MCP audit, project bindings, session search, token usage history, account reorder, profiles, isolated, concurrent sessions, CLAUDE_CONFIG_DIR, isolated hook, watch, rate limit, auto-switch, dashboard, session archive, setup wizard, recover, usage dashboard, usage compare, claudeignore, permission rules, statusline, status bar, or says "ccm", "doctor", "clean cache", "clean tmp", "session list", "session search", "env snapshot", "bind", "unbind", "reorder", "usage history", "init", "permissions audit", "statusline", "ccm watch", "ccm profiles", "ccm setup", "ccm recover", "ccm hook", "hook --isolated", "codex", "codex status", "codex usage", "codex rate limit".
 allowed-tools: Bash(ccm *), Bash(~/.ccm/bin/ccm *), Bash(curl -fsSL *install.sh*)
 ---
 
@@ -43,7 +43,7 @@ This installs to `~/.ccm/bin/ccm` — no sudo required. After install, the user 
 | `ccm unbind [path]` | Remove project binding |
 | `ccm bind list` | Show all project bindings |
 | `ccm hook` | Output shell hook for auto-switch on cd (global mode — rewrites creds) |
-| `ccm hook --isolated` | Shell hook that sets `CLAUDE_CONFIG_DIR` per-shell on cd — safe for concurrent terminals |
+| `ccm hook --isolated` | Shell hook that sets `CLAUDE_CONFIG_DIR` per-shell on cd (config + history isolation, not credentials) |
 | `ccm verify [id]` | Verify backup integrity |
 | `ccm history` | Show recent switch history |
 | `ccm export <path>` | Export accounts to archive |
@@ -88,7 +88,7 @@ This installs to `~/.ccm/bin/ccm` — no sudo required. After install, the user 
 
 | Command | Description |
 |---------|-------------|
-| `ccm doctor` | 13 health checks (disk, tmp, processes, hooks, locks, cache) |
+| `ccm doctor` | 14 health checks (disk, tmp, processes, hooks, locks, cache) |
 | `ccm doctor --fix` | Auto-fix safe issues |
 | `ccm clean debug [--days N]` | Clean debug logs (default: older than 30 days) |
 | `ccm clean telemetry` | Remove telemetry data |
@@ -103,7 +103,7 @@ This installs to `~/.ccm/bin/ccm` — no sudo required. After install, the user 
 
 | Command | Description |
 |---------|-------------|
-| `ccm switch --isolated <account>` | Switch with CLAUDE_CONFIG_DIR isolation for concurrent sessions |
+| `ccm switch --isolated <account>` | Switch with CLAUDE_CONFIG_DIR isolation (config + history, not credentials) |
 | `ccm profiles list` | List all isolated profiles |
 | `ccm profiles sync <name>` | Sync settings to a profile |
 | `ccm profiles delete <name>` | Remove a profile |
@@ -111,6 +111,7 @@ This installs to `~/.ccm/bin/ccm` — no sudo required. After install, the user 
 | `ccm watch stop` | Stop the watcher |
 | `ccm watch status` | Show watcher state |
 | `ccm recover` | Fix inconsistent credential state |
+| `ccm codex status` | Show Codex CLI rate limits, plan, model, and token usage |
 | `ccm setup` | First-run setup wizard |
 
 ### Project Setup
@@ -175,8 +176,10 @@ eval "$(ccm hook)"
 
 # Isolated mode (recommended when you use multiple terminals at once):
 eval "$(ccm hook --isolated)"
-# Sets CLAUDE_CONFIG_DIR in THIS shell only; concurrent terminals stay on
-# their own accounts without fighting over global credentials.
+# Sets CLAUDE_CONFIG_DIR in THIS shell only, so each terminal keeps its own
+# config and session history. NOTE: credentials are NOT isolated — Claude Code
+# reads those from the macOS Keychain / ~/.claude/.credentials.json regardless
+# of CLAUDE_CONFIG_DIR (upstream: anthropics/claude-code#70697).
 
 cd ~/work/project    # → auto-switches to work account
 cd ~/personal/side   # → auto-switches to personal account
@@ -251,7 +254,8 @@ ccm env restore before-experiment  # if things break
 - After switching accounts, restart Claude Code for changes to take effect
 - `ccm doctor --fix` only removes data older than 30 days — recent data is never touched
 - Environment snapshots do NOT capture credentials — only configuration
-- Use `ccm switch --isolated` for concurrent sessions in different terminals
+- `ccm switch --isolated` isolates config and session history per terminal, but NOT credentials — that is blocked upstream (anthropics/claude-code#70697)
+- `ccm codex status` is read-only: it parses Codex's own session rollout files and never writes to `~/.codex`
 - Install statusline before using `ccm watch` (provides rate limit data)
 - Session relocate updates both session files and memory references
 - Project bindings are auto-cleaned when an account is removed

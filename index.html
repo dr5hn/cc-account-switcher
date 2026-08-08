@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CCM — Claude Code Manager</title>
-<meta name="description" content="The power-user toolkit for Claude Code v4.0. Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival, setup wizard — plus multi-account management, project bindings, and disk cleanup. Open source CLI for macOS, Linux, WSL.">
+<meta name="description" content="The power-user toolkit for Claude Code v4.2. Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival, setup wizard — plus multi-account management, project bindings, and disk cleanup. Open source CLI for macOS, Linux, WSL.">
 <meta name="keywords" content="Claude Code, account manager, CLI tool, multi-account, session management, token usage, environment snapshots, token optimization, developer tools, project bindings">
 <meta name="author" content="Darshan Gada">
 <link rel="canonical" href="https://github.com/dr5hn/ccm">
@@ -12,7 +12,7 @@
 <!-- Open Graph -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="CCM — Claude Code Manager">
-<meta property="og:description" content="CCM v4.0 — concurrent sessions, rate limit auto-switch, per-account dashboards, session archival. Manage multiple Claude Code accounts from one terminal.">
+<meta property="og:description" content="CCM v4.2 — concurrent sessions, rate limit auto-switch, per-account dashboards, session archival. Manage multiple Claude Code accounts from one terminal.">
 <meta property="og:image" content="https://raw.githubusercontent.com/dr5hn/ccm/main/og-image.svg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -22,7 +22,7 @@
 <!-- Twitter Card -->
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="CCM — Claude Code Manager">
-<meta name="twitter:description" content="CCM v4.0 — concurrent sessions, rate limit auto-switch, per-account dashboards, session archival. The power-user toolkit for Claude Code.">
+<meta name="twitter:description" content="CCM v4.2 — concurrent sessions, rate limit auto-switch, per-account dashboards, session archival. The power-user toolkit for Claude Code.">
 <meta name="twitter:image" content="https://raw.githubusercontent.com/dr5hn/ccm/main/og-image.svg">
 
 <!-- Structured Data -->
@@ -31,7 +31,7 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "CCM — Claude Code Manager",
-  "description": "CCM v4.0 — the power-user toolkit for Claude Code. Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival, setup wizard, plus multi-account management from the terminal.",
+  "description": "CCM v4.2 — the power-user toolkit for Claude Code. Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival, setup wizard, plus multi-account management from the terminal.",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux, WSL",
   "offers": {
@@ -74,6 +74,51 @@
   --text-muted: #64748b;
   --terminal-bg: #0f172a;
   --terminal-bar: #1e293b;
+}
+
+/* Sticky site navigation */
+.site-nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 14px 28px;
+  background: rgba(10,15,26,0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-card);
+}
+.site-nav a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+.site-nav a:hover { color: var(--accent-cyan); }
+.site-nav .nav-brand {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-right: auto;
+  letter-spacing: 0.05em;
+}
+.site-nav .nav-cta {
+  color: var(--accent-cyan);
+  border: 1px solid rgba(56,189,248,0.35);
+  border-radius: 6px;
+  padding: 5px 14px;
+}
+.site-nav .nav-cta:hover {
+  background: rgba(56,189,248,0.1);
+  color: var(--accent-cyan);
+}
+@media (max-width: 768px) {
+  .site-nav { gap: 14px; padding: 12px 14px; flex-wrap: wrap; justify-content: center; }
+  .site-nav .nav-brand { margin-right: 0; width: 100%; text-align: center; margin-bottom: 4px; }
+  .site-nav a { font-size: 13px; }
 }
 
 html { font-size: 16px; scroll-behavior: smooth; }
@@ -883,6 +928,14 @@ body {
 </style>
 </head>
 <body>
+  <nav class="site-nav">
+    <a href="#hero" class="nav-brand">CCM</a>
+    <a href="#features">Features</a>
+    <a href="#commands">Commands</a>
+    <a href="statusline.html">Statusline</a>
+    <a href="#install">Install</a>
+    <a href="https://github.com/dr5hn/ccm" target="_blank" rel="noopener" class="nav-cta">GitHub</a>
+  </nav>
   <section class="hero" id="hero">
     <div class="hero-bg">
       <div class="hero-orb hero-orb--cyan"></div>
@@ -895,7 +948,7 @@ body {
 ██║     ██║     ██║╚██╔╝██║
 ╚██████╗╚██████╗██║ ╚═╝ ██║
  ╚═════╝ ╚═════╝╚═╝     ╚═╝</pre>
-      <div class="hero-badge">v4.0.0 · Open Source · MIT License</div>
+      <div class="hero-badge">v4.2.1 · Open Source · MIT License</div>
       <h1 class="hero-headline gradient-text">The power-user toolkit for Claude Code</h1>
       <p class="hero-sub">Concurrent sessions, rate limit auto-switch, per-account dashboards, session archival — plus multi-account management, project bindings, and disk cleanup. No Node, no Python — just bash.</p>
       <div class="hero-ctas">
@@ -1006,7 +1059,7 @@ body {
         <div class="feature-icon">⊕</div>
         <div class="feature-name">Health &amp; Maintenance</div>
         <div class="feature-cmd">ccm doctor</div>
-        <div class="feature-desc">13 health checks: disk size, tmp bloat, orphaned processes, stale locks, hook config. Auto-fix with --fix. Clean tmp files, kill leaked processes.</div>
+        <div class="feature-desc">14 health checks: disk size, tmp bloat, orphaned processes, stale locks, hook config. Auto-fix with --fix. Clean tmp files, kill leaked processes.</div>
       </div>
       <div class="feature-card glass-card">
         <div class="feature-icon">⊘</div>
@@ -1053,7 +1106,7 @@ body {
       <div class="feature-card glass-card">
         <div class="feature-icon">⊜</div>
         <div class="feature-name">Statusline</div>
-        <div class="feature-cmd">ccm statusline</div>
+        <div class="feature-cmd"><a href="statusline.html" style="color:inherit;text-decoration:underline;text-underline-offset:3px">ccm statusline</a></div>
         <div class="feature-desc">Live status bar: session cost, context %, tokens, burn rate, rate limits, branch. Shareable standalone install.</div>
       </div>
       <div class="feature-card glass-card">
@@ -1213,7 +1266,7 @@ body {
       </div>
       <div class="cmd-group-body">
         <table class="cmd-table">
-          <tr><td>ccm doctor</td><td>13 health checks (disk, tmp, processes, hooks, locks, cache)</td></tr>
+          <tr><td>ccm doctor</td><td>14 health checks (disk, tmp, processes, hooks, locks, cache)</td></tr>
           <tr><td>ccm doctor --fix</td><td>Auto-fix safe issues</td></tr>
           <tr><td>ccm clean debug [--days N]</td><td>Clean debug logs (default: 30 days)</td></tr>
           <tr><td>ccm clean telemetry</td><td>Remove telemetry data</td></tr>
@@ -1275,7 +1328,8 @@ body {
           <tr><td>ccm setup</td><td>Interactive first-run onboarding wizard</td></tr>
           <tr><td>ccm init [--force]</td><td>Generate .claudeignore for detected project type</td></tr>
           <tr><td>ccm permissions audit [--fix]</td><td>Scan for duplicate/dead permission rules</td></tr>
-          <tr><td>ccm statusline [install|remove]</td><td>Install/remove smart status bar in Claude Code</td></tr>
+          <tr><td><a href="statusline.html" style="color:var(--accent-cyan)">ccm statusline [install|remove]</a></td><td>Install/remove smart status bar in Claude Code</td></tr>
+          <tr><td>ccm codex status</td><td>Show Codex CLI rate limits, plan, and token usage</td></tr>
         </table>
       </div>
     </div>
@@ -1347,7 +1401,7 @@ var demos = {
     { type: 'active', text: 'i Project binding: switching to Account-2 (darshan@company.com)' },
     { type: 'success', text: '✓ Switched: personal → work' },
     { type: 'blank' },
-    { type: 'muted',  text: '# Auto-switch on cd (add to ~/.zshrc) — isolated mode is concurrent-terminal safe:' },
+    { type: 'muted',  text: '# Auto-switch on cd (add to ~/.zshrc) — isolated mode gives each shell its own config:' },
     { type: 'prompt', text: '$ ' },
     { type: 'cmd', text: 'eval "$(ccm hook --isolated)"' },
     { type: 'blank' },

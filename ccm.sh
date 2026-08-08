@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Configuration
-readonly CCM_VERSION="4.2.0"
+readonly CCM_VERSION="4.2.1"
 readonly BACKUP_DIR="$HOME/.claude-switch-backup"
 readonly SEQUENCE_FILE="$BACKUP_DIR/sequence.json"
 readonly SCHEMA_VERSION="3.1"
@@ -476,6 +476,46 @@ init_sequence_file() {
 }
 
 # Migrate old schema to new schema
+# Purpose: Repairs binding values corrupted by the pre-4.2.1 reorder bug (issue #8),
+#          where jq with_entries wrote the whole {key,value} entry object as the
+#          value. Recursively unwraps nested entry objects (repeated reorders nest
+#          them deeper) and drops values that cannot be recovered.
+# Parameters: None
+# Returns: 0 always (no-op when sequence.json is absent or bindings are healthy)
+# Usage: repair_bindings
+repair_bindings() {
+    [[ -f "$SEQUENCE_FILE" ]] || return 0
+
+    # Cheap guard: only rewrite when at least one binding value is not a string
+    if ! jq -e '(.bindings // {}) | any(.[]; type != "string")' "$SEQUENCE_FILE" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local before after repaired
+    before=$(jq -r '(.bindings // {}) | length' "$SEQUENCE_FILE" 2>/dev/null || echo "0")
+
+    repaired=$(jq '
+        def unwrap: if type == "object" and has("value") then (.value | unwrap) else . end;
+        .bindings = (.bindings // {}
+            | with_entries(.value |= (unwrap | if type == "number" then tostring else . end))
+            | with_entries(select((.value | type) == "string" and (.value | test("^[0-9]+$"))))
+        )
+    ' "$SEQUENCE_FILE" 2>/dev/null) || return 0
+
+    echo "$repaired" | jq empty 2>/dev/null || return 0
+
+    cp "$SEQUENCE_FILE" "$SEQUENCE_FILE.backup-bindings-$(date +%s)"
+    write_json "$SEQUENCE_FILE" "$repaired"
+    invalidate_cache
+
+    after=$(jq -r '(.bindings // {}) | length' "$SEQUENCE_FILE" 2>/dev/null || echo "0")
+    log_warning "Repaired corrupted project bindings (issue #8). Backup saved."
+    if [[ "$after" -lt "$before" ]]; then
+        log_warning "Dropped $((before - after)) unrecoverable binding(s). Re-create with 'ccm bind'."
+    fi
+    return 0
+}
+
 # Purpose: Automatically migrates sequence.json from v1.0 to v2.0 schema
 # Parameters: None
 # Returns: None (modifies sequence.json with backup)
@@ -484,6 +524,11 @@ migrate_sequence_file() {
     if [[ ! -f "$SEQUENCE_FILE" ]]; then
         return 0
     fi
+
+    # Runs unconditionally — corrupted bindings exist at the CURRENT schema
+    # version, so this must not sit behind the version check below, which
+    # early-returns for everyone already on $SCHEMA_VERSION.
+    repair_bindings
 
     local current_version
     current_version=$(jq -r '.schemaVersion // "1.0"' "$SEQUENCE_FILE")
@@ -2085,6 +2130,26 @@ cmd_undo() {
     perform_switch "$from_account"
 }
 
+# Purpose: Remaps project binding values from old account numbers to new ones.
+#          Extracted from cmd_reorder so the remap can be tested directly —
+#          issue #8 was a silent corruption in this expression that went
+#          unnoticed for months because nothing exercised it.
+# Parameters: $1 — sequence JSON, $2 — JSON object mapping old number -> new number
+# Returns: Prints the sequence JSON with .bindings remapped; non-zero on jq failure
+# Usage: updated_sequence=$(remap_bindings "$updated_sequence" "$map_json")
+remap_bindings() {
+    local sequence_json="$1"
+    local map_json="$2"
+
+    # NOTE: inside jq's with_entries, `.` is the {key,value} entry object, not
+    # the value. Binding `.value` (not `.`) is load-bearing — see issue #8.
+    echo "$sequence_json" | jq --argjson map "$map_json" '
+        .bindings = (.bindings // {} | with_entries(
+            .value = (.value as $v | if $map[$v | tostring] != null then ($map[$v | tostring] | tostring) else $v end)
+        ))
+    '
+}
+
 # Purpose: Reorders accounts by moving one account to a new position
 # Parameters: $1 — source position (current account number), $2 — target position
 # Returns: 0 on success, 1 on failure
@@ -2227,11 +2292,7 @@ cmd_reorder() {
     fi
 
     # Update bindings to reference new account numbers
-    updated_sequence=$(echo "$updated_sequence" | jq --argjson map "$map_json" '
-        .bindings = (.bindings // {} | with_entries(
-            .value = (. as $v | if $map[$v | tostring] != null then ($map[$v | tostring] | tostring) else $v end)
-        ))
-    ')
+    updated_sequence=$(remap_bindings "$updated_sequence" "$map_json")
 
     # Write sequence.json FIRST — if interrupted after this point,
     # credential files can be recovered by re-running reorder
@@ -2514,6 +2575,8 @@ cmd_hook() {
 
 # Cache: associative array of path → account number
 typeset -gA _ccm_bindings 2>/dev/null || declare -gA _ccm_bindings 2>/dev/null || declare -A _ccm_bindings
+# Cache: associative array of account number → resolved isolated profile path
+typeset -gA _ccm_profile_paths 2>/dev/null || declare -gA _ccm_profile_paths 2>/dev/null || declare -A _ccm_profile_paths
 _ccm_active_account=""
 _ccm_seq_file="${HOME}/.claude-switch-backup/sequence.json"
 _ccm_seq_mtime=""
@@ -2534,8 +2597,10 @@ _ccm_load_bindings() {
     [[ "$current_mtime" == "$_ccm_seq_mtime" ]] && return
     _ccm_seq_mtime="$current_mtime"
 
-    # Reset and reload
+    # Reset and reload. _ccm_profile_paths is cleared too: a reorder remaps
+    # account numbers, so cached number → path entries can go stale.
     _ccm_bindings=()
+    _ccm_profile_paths=()
     _ccm_active_account=$(command jq -r '.activeAccountNumber // empty' "$_ccm_seq_file" 2>/dev/null)
 
     local pairs
@@ -2567,16 +2632,29 @@ _ccm_check_binding() {
     while [[ -n "$dir" ]]; do
         if [[ -n "${_ccm_bindings[$dir]+x}" ]]; then
             local bound_account="${_ccm_bindings[$dir]}"
-            if [[ "$bound_account" != "$_ccm_active_account" ]]; then
-                local profile_path
+            local profile_path="${_ccm_profile_paths[$bound_account]:-}"
+
+            # Resolve once per account per shell. 'ccm switch --isolated
+            # --quiet' is idempotent and prints the profile path.
+            if [[ -z "$profile_path" ]]; then
                 profile_path=$(command ccm switch --isolated --quiet "$bound_account" 2>/dev/null)
                 if [[ -n "$profile_path" && -d "$profile_path" ]]; then
+                    _ccm_profile_paths[$bound_account]="$profile_path"
+                fi
+            fi
+
+            if [[ -n "$profile_path" && -d "$profile_path" ]]; then
+                # Compare against the variable this hook actually manages, not
+                # the default account number. Comparing account numbers meant a
+                # directory bound to the DEFAULT account never exported, and a
+                # stale CLAUDE_CONFIG_DIR was never corrected. See issue #9.
+                if [[ "${CLAUDE_CONFIG_DIR:-}" != "$profile_path" ]]; then
                     export CLAUDE_CONFIG_DIR="$profile_path"
                     _ccm_active_account="$bound_account"
                     echo "[ccm] Isolated profile active: ${profile_path##*/} (account $bound_account)"
-                else
-                    echo "[ccm] Failed to activate isolated profile for account $bound_account" >&2
                 fi
+            else
+                echo "[ccm] Failed to activate isolated profile for account $bound_account" >&2
             fi
             return 0
         fi
@@ -2667,7 +2745,7 @@ cmd_export() {
     show_progress "Creating export archive"
 
     local temp_dir
-    temp_dir=$(mktemp -d)
+    temp_dir=$(umask 077; mktemp -d)
     trap 'rm -rf -- "$temp_dir"' EXIT
 
     # Copy sequence file
@@ -2740,7 +2818,7 @@ cmd_import() {
 
     show_progress "Extracting archive"
     local temp_dir
-    temp_dir=$(mktemp -d)
+    temp_dir=$(umask 077; mktemp -d)
     trap 'rm -rf -- "$temp_dir"' EXIT
 
     tar -xzf "$archive_path" -C "$temp_dir" 2>/dev/null || {
@@ -2949,6 +3027,12 @@ session_relocate() {
         session_files+=("$f")
     done < <(find "$new_session_dir" -name "*.jsonl" -type f -print0 2>/dev/null)
 
+    # Escape sed metacharacters — filesystem paths may legally contain | & \,
+    # any of which would corrupt the substitution expression below.
+    local sed_old sed_new
+    sed_old=$(printf '%s' "$old_path" | sed 's/[|&\\]/\\&/g')
+    sed_new=$(printf '%s' "$new_path" | sed 's/[|&\\]/\\&/g')
+
     local total_files=${#session_files[@]}
     if [[ $total_files -gt 0 ]]; then
         log_info "Updating path references in $total_files session file(s)..."
@@ -2956,8 +3040,8 @@ session_relocate() {
             ((file_index++))
             printf "\r  [%d/%d] %s" "$file_index" "$total_files" "$(basename "$session_file")"
             if grep -qF "$old_path" "$session_file" 2>/dev/null; then
-                temp_file=$(mktemp)
-                sed "s|$old_path|$new_path|g" "$session_file" > "$temp_file"
+                temp_file=$(umask 077; mktemp)
+                sed "s|$sed_old|$sed_new|g" "$session_file" > "$temp_file"
                 mv "$temp_file" "$session_file"
                 ((files_updated++))
             fi
@@ -2977,8 +3061,8 @@ session_relocate() {
             log_info "Updating ${#mem_files[@]} memory file(s)..."
             for mem_file in "${mem_files[@]}"; do
                 if grep -qF "$old_path" "$mem_file" 2>/dev/null; then
-                    temp_file=$(mktemp)
-                    sed "s|$old_path|$new_path|g" "$mem_file" > "$temp_file"
+                    temp_file=$(umask 077; mktemp)
+                    sed "s|$sed_old|$sed_new|g" "$mem_file" > "$temp_file"
                     mv "$temp_file" "$mem_file"
                     ((memory_updated++))
                 fi
@@ -3105,7 +3189,7 @@ show_help() {
             echo "  delete <name>            Remove an isolated profile"
             echo ""
             echo "Profiles are created via 'ccm switch --isolated <account>'."
-            echo "Each profile uses CLAUDE_CONFIG_DIR for true concurrent sessions."
+            echo "Each profile has its own CLAUDE_CONFIG_DIR config and history."
             echo ""
             echo -e "${COLOR_BOLD}Examples:${COLOR_RESET}"
             echo "  ccm switch --isolated work     # create and activate profile"
@@ -3145,6 +3229,22 @@ show_help() {
             echo "  Keychain entries vs sequence.json (macOS)"
             echo "  Active account vs credential state"
             echo "  Profile directory validity"
+            echo "  Project binding integrity"
+            ;;
+        codex)
+            echo -e "${COLOR_BOLD}ccm codex — OpenAI Codex CLI usage${COLOR_RESET}"
+            echo ""
+            echo "Usage: ccm codex status"
+            echo ""
+            echo "Shows Codex rate limits, plan, model, context occupancy and"
+            echo "cumulative session tokens, and writes a snapshot to"
+            echo "codex-limits.json for 'ccm watch' to read."
+            echo ""
+            echo -e "${COLOR_BOLD}How it works:${COLOR_RESET}"
+            echo "  Codex has no command-based statusline hook — its"
+            echo "  tui.status_line is a list of built-in footer items, not a"
+            echo "  script. CCM instead reads Codex's own session rollout"
+            echo "  files. It never writes to ~/.codex."
             ;;
         setup)
             echo -e "${COLOR_BOLD}ccm setup — First-Run Setup Wizard${COLOR_RESET}"
@@ -3488,6 +3588,11 @@ env_restore() {
         return 1
     fi
 
+    if ! validate_snapshot_name "$name"; then
+        log_error "Invalid snapshot name. Use only letters, numbers, dots, hyphens, underscores."
+        return 1
+    fi
+
     shift
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -3662,6 +3767,12 @@ env_delete() {
 
     if [[ -z "$name" ]]; then
         log_error "Snapshot name required. Usage: ccm env delete <name>"
+        return 1
+    fi
+
+    # Guard before building the path — this function rm -rf's the result
+    if ! validate_snapshot_name "$name"; then
+        log_error "Invalid snapshot name. Use only letters, numbers, dots, hyphens, underscores."
         return 1
     fi
 
@@ -4734,6 +4845,19 @@ doctor_scan() {
         printf "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} %-24s %s\n" "Hook async config" "All hooks properly configured"
     fi
 
+    # 14. Codex CLI (informational — never counts toward $issues, since a high
+    #     Codex rate limit is not a CCM health problem, and most users have no
+    #     Codex install at all)
+    if [[ -d "$CODEX_DIR" ]]; then
+        local codex_data cpct
+        if codex_data=$(codex_read_limits); then
+            cpct=$(echo "$codex_data" | jq -r '.primary.used_percentage')
+            printf "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} %-24s %s\n" "Codex CLI" "Detected — rate limit ${cpct}% used"
+        else
+            printf "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} %-24s %s\n" "Codex CLI" "Detected — no usage data yet"
+        fi
+    fi
+
     # Summary
     echo ""
     if [[ "$issues" -eq 0 ]]; then
@@ -5014,7 +5138,7 @@ clean_history() {
     fi
 
     local temp_file
-    temp_file=$(mktemp "${history_file}.XXXXXX")
+    temp_file=$(umask 077; mktemp "${history_file}.XXXXXX")
     tail -n "$keep" "$history_file" > "$temp_file"
     mv "$temp_file" "$history_file"
     log_success "Removed $to_remove history entries, kept last $keep"
@@ -5263,7 +5387,7 @@ clean_all() {
             echo -e "  ${COLOR_YELLOW}${SYM_WARN}${COLOR_RESET} History: $history_lines entries ($to_remove over limit of 1000)"
             if [[ "$dry_run" -eq 0 ]]; then
                 local temp_file
-                temp_file=$(mktemp "${history_file}.XXXXXX")
+                temp_file=$(umask 077; mktemp "${history_file}.XXXXXX")
                 tail -n 1000 "$history_file" > "$temp_file"
                 mv "$temp_file" "$history_file"
                 log_step "  Trimmed history to 1000 entries (removed $to_remove)"
@@ -5501,6 +5625,11 @@ profiles_sync() {
         return 1
     fi
 
+    if ! validate_snapshot_name "$name"; then
+        log_error "Invalid profile name. Use only letters, numbers, dots, hyphens, underscores."
+        return 1
+    fi
+
     local profile_dir="$PROFILES_DIR/$name"
     if [[ ! -d "$profile_dir" ]]; then
         log_error "Profile not found: $name"
@@ -5522,6 +5651,12 @@ profiles_delete() {
     local name="${1:-}"
     if [[ -z "$name" ]]; then
         log_error "Usage: ccm profiles delete <name>"
+        return 1
+    fi
+
+    # Guard before building the path — this function rm -rf's the result
+    if ! validate_snapshot_name "$name"; then
+        log_error "Invalid profile name. Use only letters, numbers, dots, hyphens, underscores."
         return 1
     fi
 
@@ -5727,6 +5862,21 @@ watch_status() {
     else
         echo ""
         echo -e "  Rate data: ${COLOR_YELLOW}unavailable${COLOR_RESET} (install statusline first)"
+    fi
+
+    # Codex is optional — stay silent entirely when it isn't installed
+    if [[ -d "$CODEX_DIR" ]]; then
+        echo ""
+        echo -e "  ${COLOR_BOLD}Codex${COLOR_RESET}"
+        local codex_data
+        if codex_data=$(codex_read_limits); then
+            local cpct cplan
+            cpct=$(echo "$codex_data" | jq -r '.primary.used_percentage')
+            cplan=$(echo "$codex_data" | jq -r '.plan_type')
+            echo "    Rate limit: ${cpct}% used (plan: $cplan)"
+        else
+            echo "    No usage data yet."
+        fi
     fi
     echo ""
 }
@@ -6105,6 +6255,11 @@ session_restore() {
         return 1
     fi
 
+    if ! validate_snapshot_name "$archive_name"; then
+        log_error "Invalid archive name. Use only letters, numbers, dots, hyphens, underscores."
+        return 1
+    fi
+
     local archive_path="$ARCHIVES_DIR/$archive_name"
     if [[ ! -f "$archive_path" ]]; then
         log_error "Archive not found: $archive_name"
@@ -6112,8 +6267,21 @@ session_restore() {
         return 1
     fi
 
+    # Reject absolute paths and parent-directory traversal before extracting.
+    # Without this a crafted archive could write anywhere the user can write.
+    if tar tzf "$archive_path" 2>/dev/null | grep -qE '^/|(^|/)\.\.(/|$)'; then
+        log_error "Archive contains absolute or traversing paths — refusing to extract."
+        return 1
+    fi
+
+    mkdir -p "$CLAUDE_PROJECTS_DIR"
+
     show_progress "Restoring sessions from $archive_name"
-    tar xzf "$archive_path" 2>/dev/null
+    if ! tar xzf "$archive_path" -C "$CLAUDE_PROJECTS_DIR" 2>/dev/null; then
+        complete_progress
+        log_error "Failed to extract archive: $archive_name"
+        return 1
+    fi
     complete_progress
     log_success "Restored sessions from $archive_name"
 }
@@ -6401,6 +6569,23 @@ cmd_recover() {
         done
         echo ""
     fi
+
+    # Check 5: Project bindings
+    echo -e "${COLOR_BOLD}Check 5: Project bindings${COLOR_RESET}"
+    local binding_count malformed
+    binding_count=$(jq -r '(.bindings // {}) | length' "$SEQUENCE_FILE" 2>/dev/null || echo "0")
+    malformed=$(jq -r '[(.bindings // {}) | .[] | select(type != "string")] | length' "$SEQUENCE_FILE" 2>/dev/null || echo "0")
+
+    if [[ "$binding_count" -eq 0 ]]; then
+        echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} No project bindings configured"
+    elif [[ "$malformed" -gt 0 ]]; then
+        echo -e "  ${COLOR_RED}${SYM_ERR}${COLOR_RESET} $malformed of $binding_count binding(s) are malformed (issue #8)"
+        echo "    Run any ccm command to auto-repair, or re-create with 'ccm bind'."
+        issues=$((issues + 1))
+    else
+        echo -e "  ${COLOR_GREEN}${SYM_OK}${COLOR_RESET} All $binding_count binding(s) well-formed"
+    fi
+    echo ""
 
     # Summary
     if [[ "$issues" -eq 0 ]]; then
@@ -6740,6 +6925,196 @@ STATUSLINE_EOF
             log_error "Usage: ccm statusline [install|remove]"
             return 1
             ;;
+    esac
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Codex Module — read-only OpenAI Codex CLI usage bridge
+#
+# Codex exposes no command-based statusline hook: its `tui.status_line` is an
+# ordered list of built-in footer item identifiers, not a script to run. But it
+# already appends rate_limits and token usage to its own session rollout JSONL,
+# so we read that and mirror it into codex-limits.json — the same data-bridge
+# pattern the Claude statusline uses for rate-limits.json.
+#
+# This module is strictly read-only with respect to ~/.codex. It never writes
+# to the user's Codex config, sessions, or credentials.
+# ──────────────────────────────────────────────────────────────────────────────
+
+readonly CODEX_DIR="$HOME/.codex"
+readonly CODEX_LIMITS_FILE="$BACKUP_DIR/codex-limits.json"
+
+# Purpose: Lists Codex session rollout files, newest first
+# Parameters: $1 — how many to list (default 10)
+# Returns: Prints one rollout path per line; returns 1 when Codex or its
+#          sessions are absent, or no rollouts exist
+# Usage: while read -r f; do ...; done < <(codex_rollouts 5)
+codex_rollouts() {
+    local limit="${1:-10}"
+    local sessions_dir="$CODEX_DIR/sessions"
+    [[ -d "$sessions_dir" ]] || return 1
+
+    local platform out
+    platform=$(detect_platform)
+
+    # stat flags differ by platform; -exec ... + avoids the argv overflow that
+    # `ls -t` hits once a user accumulates thousands of rollouts.
+    if [[ "$platform" == "macos" ]]; then
+        out=$(find "$sessions_dir" -name 'rollout-*.jsonl' -type f \
+              -exec stat -f '%m %N' {} + 2>/dev/null | sort -rn | head -n "$limit" | cut -d' ' -f2-)
+    else
+        out=$(find "$sessions_dir" -name 'rollout-*.jsonl' -type f \
+              -exec stat -c '%Y %n' {} + 2>/dev/null | sort -rn | head -n "$limit" | cut -d' ' -f2-)
+    fi
+
+    [[ -n "$out" ]] || return 1
+    echo "$out"
+}
+
+# Purpose: Finds the newest rollout that actually contains rate limit data
+# Parameters: None
+# Returns: Prints the rollout path; returns 1 when none of the recent
+#          rollouts carry rate_limits
+# Usage: rollout=$(codex_latest_rollout) || return 1
+# Note: The newest rollout is often a session that has not completed a turn
+#       yet, so it has no rate_limits record. Falling back through recent
+#       rollouts keeps the reading stable while a Codex session is starting.
+codex_latest_rollout() {
+    local f
+    while IFS= read -r f; do
+        [[ -f "$f" ]] || continue
+        # grep -qF, not jq: rollouts run to hundreds of MB, and Codex appends
+        # to the live one, so a half-written final line makes jq fail on the
+        # whole file and we would skip a perfectly good reading.
+        if grep -qF '"rate_limits"' "$f" 2>/dev/null; then
+            echo "$f"
+            return 0
+        fi
+    done < <(codex_rollouts 10)
+    return 1
+}
+
+# Purpose: Reads the newest Codex rollout and emits normalised usage JSON
+# Parameters: None
+# Returns: Prints JSON to stdout; returns 1 when no usage data is available
+# Usage: data=$(codex_read_limits) || return 1
+codex_read_limits() {
+    local rollout
+    rollout=$(codex_latest_rollout) || return 1
+
+    # Rollouts are append-only, so the LAST record of each kind is current.
+    local rl
+    rl=$(jq -c 'select(.payload.rate_limits != null) | .payload.rate_limits' "$rollout" 2>/dev/null | tail -1)
+    [[ -n "$rl" ]] || return 1
+
+    # Codex reports two different totals and conflating them is misleading:
+    #   total_token_usage — cumulative for the whole session, dominated by
+    #                       cache reads; can far exceed the context window
+    #   last_token_usage  — the most recent turn, which is what actually
+    #                       occupies the context window
+    local usage model
+    usage=$(jq -c 'select(.payload.info.total_token_usage != null)
+                   | {session_total:  .payload.info.total_token_usage.total_tokens,
+                      context_used:   (.payload.info.last_token_usage.total_tokens // 0),
+                      context_window: .payload.info.model_context_window}' "$rollout" 2>/dev/null | tail -1)
+    [[ -n "$usage" ]] || usage='{"session_total":0,"context_used":0,"context_window":0}'
+
+    model=$(jq -r 'select(.type == "turn_context") | .payload.model // empty' "$rollout" 2>/dev/null | tail -1)
+    [[ -n "$model" ]] || model="unknown"
+
+    jq -n --argjson rl "$rl" --argjson usage "$usage" \
+          --arg model "$model" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+        {
+            primary: {
+                used_percentage: ($rl.primary.used_percent // 0),
+                window_minutes:  ($rl.primary.window_minutes // 0),
+                resets_at:       ($rl.primary.resets_at // 0)
+            },
+            secondary: (if $rl.secondary == null then null else {
+                used_percentage: ($rl.secondary.used_percent // 0),
+                window_minutes:  ($rl.secondary.window_minutes // 0),
+                resets_at:       ($rl.secondary.resets_at // 0)
+            } end),
+            credits:   ($rl.credits // null),
+            plan_type: ($rl.plan_type // "unknown"),
+            model:     $model,
+            tokens:    $usage,
+            updated_at: $now
+        }
+    '
+}
+
+# Purpose: Formats a Unix epoch as local time, cross-platform
+# Parameters: $1 — epoch seconds
+# Returns: Prints a human-readable timestamp, or "unknown" for bad input
+# Usage: format_epoch 1786603510
+format_epoch() {
+    local epoch="$1"
+    if [[ ! "$epoch" =~ ^[0-9]+$ ]] || [[ "$epoch" -eq 0 ]]; then
+        echo "unknown"
+        return
+    fi
+    date -r "$epoch" '+%Y-%m-%d %H:%M' 2>/dev/null && return
+    date -d "@$epoch" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "unknown"
+}
+
+# Purpose: Prints Codex rate limit and token usage, refreshing codex-limits.json
+# Parameters: None
+# Returns: 0 on success, 1 when Codex is not installed or has no usage data
+# Usage: codex_status
+codex_status() {
+    echo -e "${COLOR_BOLD}Codex Usage${COLOR_RESET}"
+    echo ""
+
+    if [[ ! -d "$CODEX_DIR" ]]; then
+        log_info "Codex CLI not detected (no $CODEX_DIR)."
+        return 1
+    fi
+
+    local data
+    if ! data=$(codex_read_limits); then
+        log_warning "No Codex usage data found. Start a Codex session first."
+        return 1
+    fi
+
+    write_json "$CODEX_LIMITS_FILE" "$data"
+
+    local pct window resets plan model session_total ctx_used ctx_win balance
+    pct=$(echo "$data" | jq -r '.primary.used_percentage')
+    window=$(echo "$data" | jq -r '.primary.window_minutes')
+    resets=$(echo "$data" | jq -r '.primary.resets_at')
+    plan=$(echo "$data" | jq -r '.plan_type')
+    model=$(echo "$data" | jq -r '.model')
+    session_total=$(echo "$data" | jq -r '.tokens.session_total')
+    ctx_used=$(echo "$data" | jq -r '.tokens.context_used')
+    ctx_win=$(echo "$data" | jq -r '.tokens.context_window')
+    balance=$(echo "$data" | jq -r '.credits.balance // "n/a"')
+
+    printf "  %-12s %s\n" "Plan:" "$plan"
+    printf "  %-12s %s\n" "Model:" "$model"
+    printf "  %-12s %s%% used (%s min window)\n" "Rate limit:" "$pct" "$window"
+    [[ "$resets" != "0" ]] && printf "  %-12s %s\n" "Resets at:" "$(format_epoch "$resets")"
+
+    if [[ "$ctx_win" -gt 0 ]] && [[ "$ctx_used" -gt 0 ]]; then
+        local ctx_pct
+        ctx_pct=$(awk -v u="$ctx_used" -v w="$ctx_win" 'BEGIN{printf "%.0f", (u/w)*100}')
+        printf "  %-12s %s / %s (%s%%)\n" "Context:" \
+            "$(format_token_count "$ctx_used")" "$(format_token_count "$ctx_win")" "$ctx_pct"
+    fi
+    printf "  %-12s %s (cumulative, incl. cache reads)\n" "Session:" "$(format_token_count "$session_total")"
+    printf "  %-12s %s\n" "Credits:" "$balance"
+    echo ""
+    log_info "Snapshot written to $CODEX_LIMITS_FILE"
+}
+
+# Purpose: Routes `ccm codex` subcommands
+# Parameters: $1 — subcommand (status); defaults to status
+# Returns: 0 on success, 1 on unknown subcommand or unavailable data
+# Usage: cmd_codex status
+cmd_codex() {
+    case "${1:-status}" in
+        status) codex_status ;;
+        *)      log_error "Unknown codex subcommand '${1}'"; echo "Usage: ccm codex status"; return 1 ;;
     esac
 }
 
@@ -7140,6 +7515,7 @@ main() {
         profiles)       shift; cmd_profiles "$@" ;;
         watch)          shift; cmd_watch "$@" ;;
         recover)        cmd_recover ;;
+        codex)          shift; cmd_codex "$@" ;;
         setup)          cmd_setup ;;
         session)        shift; cmd_session "$@" ;;
         env)            shift; cmd_env "$@" ;;

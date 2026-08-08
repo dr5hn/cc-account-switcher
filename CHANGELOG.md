@@ -2,9 +2,30 @@
 
 All notable changes to CCM (Claude Code Manager) will be documented in this file.
 
-## [Unreleased]
+## [4.2.1] - 2026-08-08
+
 ### Fixed
-- Statusline account line showed the globally-active account instead of the profile actually in use when a session ran inside an isolated profile (`ccm switch --isolated`). It read `oauthAccount.emailAddress` from `~/.claude/.claude.json` (or `~/.claude.json`) unconditionally, ignoring `CLAUDE_CONFIG_DIR`. It now prefers `$CLAUDE_CONFIG_DIR/.claude.json` when that variable is set, falling back to the global config otherwise.
+- `reorder` no longer corrupts project bindings. Inside jq's `with_entries`, `.` is the entry object `{key, value}` rather than the value, so `. as $v` bound the whole entry, the account-number lookup always missed, and the `else` branch wrote the entry object back as the binding value. The corruption compounded with every reorder, and silently broke every directory binding. ([#8](https://github.com/dr5hn/ccm/issues/8))
+- Bindings already corrupted by that bug are now repaired automatically on the next `ccm` invocation, including values nested by repeated reorders. The repair backs up `sequence.json` first and runs unconditionally, since affected users are already on the current schema version. ([#8](https://github.com/dr5hn/ccm/issues/8))
+- `hook --isolated` now activates the profile for directories bound to the *default* account, and corrects a stale `CLAUDE_CONFIG_DIR` in long-lived shells. It compared the bound account number against `activeAccountNumber` instead of comparing the resolved profile path against the variable it manages. ([#9](https://github.com/dr5hn/ccm/issues/9))
+- `get_claude_config_path` honors `CLAUDE_CONFIG_DIR`, so accounts living in non-standard config directories can be added. ([#3](https://github.com/dr5hn/ccm/issues/3), [PR #4](https://github.com/dr5hn/ccm/pull/4) by @jesseclark)
+- The statusline resolves the active account from `$CLAUDE_CONFIG_DIR` when set, so an isolated session no longer shows the globally-active account. Applied to both `ccm.sh` and the standalone `statusline.sh`, which the original change missed. ([PR #7](https://github.com/dr5hn/ccm/pull/7) by @haddowg)
+
+### Added
+- `ccm codex status` — read-only OpenAI Codex CLI usage bridge reporting rate limits, plan, model, context occupancy and cumulative session tokens, written to `codex-limits.json`. Also surfaced in `ccm watch status` and `ccm doctor`. Codex exposes no command-based statusline hook, so CCM reads Codex's own session rollout files; it never writes to `~/.codex`.
+- `ccm recover` gained a fifth check for malformed project bindings.
+- First automated test suite — 64 bats tests across 7 files, with a CI matrix on ubuntu and macOS. ([PR #4](https://github.com/dr5hn/ccm/pull/4))
+- Sticky site navigation on the landing page, which previously had none, making the statusline visual guide reachable for the first time.
+
+### Security
+- Path traversal: `env_restore`, `env_delete`, `profiles_sync`, `profiles_delete` and `session_restore` now validate names before constructing paths. `env_delete` and `profiles_delete` `rm -rf` the result, so a crafted name could delete directories outside `BACKUP_DIR`. ([#6](https://github.com/dr5hn/ccm/issues/6) C1)
+- `session_relocate` escapes `|`, `&` and `\` before interpolating filesystem paths into `sed`'s substitution expression. ([#6](https://github.com/dr5hn/ccm/issues/6) H1)
+- `session restore` extracts to `CLAUDE_PROJECTS_DIR` instead of the current directory, and rejects archives containing absolute or traversing member paths. ([#6](https://github.com/dr5hn/ccm/issues/6) H2)
+- Credential export directories, session JSONL temp files and history temp files are created under `umask 077`. ([#6](https://github.com/dr5hn/ccm/issues/6) H3, M3, L2)
+
+### Changed
+- Documentation now states plainly that `--isolated` separates config and session history but **not** credentials, which is blocked on an upstream Claude Code limitation. The previous "true concurrent sessions" phrasing overclaimed. ([#5](https://github.com/dr5hn/ccm/issues/5))
+- CI runs the macOS test job under bash 4.4+; macOS ships bash 3.2, which cannot parse the `declare -A` at `ccm.sh:37`.
 
 ## [4.2.0] - 2026-04-25
 ### Added

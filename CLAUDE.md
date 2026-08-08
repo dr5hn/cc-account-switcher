@@ -41,20 +41,25 @@ The script follows a strict top-to-bottom section layout:
 3. **Sequence & Cache** (lines 370–550) — `sequence.json` is the account registry (schema v3.1, auto-migrates from v1/v2/v3). `resolve_account_identifier()` matches by number, email, or alias. Bindings stored in `sequence.json` under `"bindings"` key
 4. **Session Management** (lines 550–1160) — `session list|info|search|relocate|clean|archive|restore|archives`. Path encoding: `/` → `-` for directory names under `~/.claude/projects/`
 5. **Account Management** (lines 1160–2800) — Switching (checks project bindings first, supports `--isolated [--quiet]` for CLAUDE_CONFIG_DIR profiles), reordering (two-pass credential rename with pre-validated JSON), bind/unbind, shell hook (`ccm hook [--isolated]`), export/import
-6. **Help System** (lines 2870–3350) — Topic-based help with `show_help()`, covers all modules including profiles, watch, recover, setup
-7. **Environment Snapshots** (lines 3350–3755) — Capture/restore settings.json, MCP config, CLAUDE.md (strips tokens on save)
-8. **Usage Module** (lines 3755–4345) — `usage summary|top|history|dashboard|compare` (history parses JSONL for token analytics using jq, dashboard attributes usage to accounts via switch history)
-9. **Health & Maintenance** (lines 4345–5330) — `doctor` (13 checks), `clean` (9 targets + all), `permissions audit` (duplicate/dead rule detection)
-10. **Profiles Module** (lines 5333–5535) — `switch_isolated [--quiet]` creates CLAUDE_CONFIG_DIR profiles (quiet mode prints only the path for hook use), `cmd_profiles` routes list/sync/delete
-11. **Watch Module** (lines 5536–5724) — `cmd_watch` routes start/stop/status, background polling of `rate-limits.json`
-12. **Usage Dashboard Module** (lines 5725–5942) — `usage_dashboard` with per-account token attribution, `format_token_count` helper
-13. **Session Archive Module** (lines 5943–6144) — `session_archive` compresses old JSONL to tar.gz, `session_restore`, `session_archives_list`
-14. **Setup Module** (lines 6145–6296) — `cmd_setup` interactive first-run wizard (6 steps)
-15. **Recover Module** (lines 6297–6409) — `cmd_recover` checks credential consistency (4 checks)
-16. **Statusline Module** (lines 6410–6691) — `statusline install|remove` generates a bash script that reads Claude Code session JSON via stdin, writes rate-limits.json for the watcher
-17. **Init Module** (lines 6693–6889) — `init` auto-generates `.claudeignore` by detecting project type from manifest files
-18. **Permissions Module** (lines 6890–7050) — `permissions audit [--fix]` scans settings.json for duplicate/contradictory/dead rules
-19. **Main Entry** (lines 7050–7115) — `--no-color` parsing, dependency checks, case-based command dispatch with deprecation notices for removed commands
+6. **Help System** (lines 2900–3463) — Topic-based help with `show_help()`, covers all modules including profiles, watch, recover, setup, codex
+7. **Environment Snapshots & Audit** (lines 3464–3875) — capture/restore settings.json, MCP config, CLAUDE.md (strips tokens on save)
+8. **Usage Statistics** (lines 3876–4467) — `usage summary|top|history|sessions|compare`
+9. **Doctor Module** (lines 4468–4873) — 14 health checks (the Codex check is informational and never counts toward the issue total)
+10. **Clean Module** (lines 4874–5466) — 9 targeted cleanup commands plus `clean all`
+11. **Profiles Module** (lines 5467–5680) — `switch_isolated [--quiet]` creates CLAUDE_CONFIG_DIR profiles (quiet mode prints only the path for hook use), `cmd_profiles` routes list/sync/delete
+12. **Watch Module** (lines 5681–5884) — `cmd_watch` routes start/stop/status, background polling of `rate-limits.json`; `watch status` also reports Codex when installed
+13. **Usage Dashboard Module** (lines 5885–6102) — `usage_dashboard` with per-account token attribution, `format_token_count` helper
+14. **Session Archive Module** (lines 6103–6322) — `session_archive` compresses old JSONL to tar.gz, `session_restore` (validates the name and extracts with `-C`), `session_archives_list`
+15. **Setup Module** (lines 6323–6474) — `cmd_setup` interactive first-run wizard (6 steps)
+16. **Recover Module** (lines 6475–6604) — `cmd_recover` checks credential consistency (5 checks, including malformed project bindings)
+17. **Statusline Module** (lines 6605–6931) — `statusline install|remove` generates a bash script that reads Claude Code session JSON via stdin, writes rate-limits.json for the watcher
+18. **Codex Module** (lines 6932–7096) — `codex_latest_rollout()`, `codex_read_limits()`, `format_epoch()`, `codex_status()`, `cmd_codex` routes `status`. Read-only bridge parsing Codex CLI session rollout JSONL for rate limits and token usage; writes `codex-limits.json`. **Never writes to `~/.codex`.**
+19. **Init Module** (lines 7097–7293) — `init` auto-generates `.claudeignore` by detecting project type from manifest files
+20. **Permissions Module** (lines 7294–7443) — `permissions audit [--fix]` scans settings.json for duplicate/contradictory/dead rules
+21. **Main Entry** (lines 7444–7520) — `--no-color` parsing, dependency checks, case-based command dispatch with deprecation notices for removed commands
+
+> Line ranges drift with every change. Re-derive with:
+> `awk '/^# ─{20,}/{getline l; if (l ~ /^# [A-Z]/) print NR": "l}' ccm.sh`
 
 ### Data layout
 
@@ -72,6 +77,7 @@ The script follows a strict top-to-bottom section layout:
 │   └── *.tar.gz               # Compressed sessions
 ├── usage-history.json         # Per-account usage aggregates (NEW in v4.0)
 ├── rate-limits.json           # Latest rate limit snapshot from statusline (NEW in v4.0)
+├── codex-limits.json          # Latest Codex CLI usage snapshot (NEW in v4.2.1)
 └── watch.pid                  # Background watcher PID (NEW in v4.0)
 
 ~/.claude/projects/            # Claude Code session directories
