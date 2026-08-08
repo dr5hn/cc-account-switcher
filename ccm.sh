@@ -102,9 +102,18 @@ detect_platform() {
 # Returns: Prints the absolute path to .claude.json
 # Usage: config_path=$(get_claude_config_path)
 get_claude_config_path() {
+    # Honor CLAUDE_CONFIG_DIR if set (supports non-standard config directories)
+    if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+        local env_config="${CLAUDE_CONFIG_DIR}/.claude.json"
+        if [[ -f "$env_config" ]]; then
+            echo "$env_config"
+            return
+        fi
+    fi
+
     local primary_config="$HOME/.claude/.claude.json"
     local fallback_config="$HOME/.claude.json"
-    
+
     # Check primary location first
     if [[ -f "$primary_config" ]]; then
         # Verify it has valid oauthAccount structure
@@ -113,7 +122,7 @@ get_claude_config_path() {
             return
         fi
     fi
-    
+
     # Fallback to standard location
     echo "$fallback_config"
 }
