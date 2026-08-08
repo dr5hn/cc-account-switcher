@@ -2575,6 +2575,8 @@ cmd_hook() {
 
 # Cache: associative array of path → account number
 typeset -gA _ccm_bindings 2>/dev/null || declare -gA _ccm_bindings 2>/dev/null || declare -A _ccm_bindings
+# Cache: associative array of account number → resolved isolated profile path
+typeset -gA _ccm_profile_paths 2>/dev/null || declare -gA _ccm_profile_paths 2>/dev/null || declare -A _ccm_profile_paths
 _ccm_active_account=""
 _ccm_seq_file="${HOME}/.claude-switch-backup/sequence.json"
 _ccm_seq_mtime=""
@@ -2595,8 +2597,10 @@ _ccm_load_bindings() {
     [[ "$current_mtime" == "$_ccm_seq_mtime" ]] && return
     _ccm_seq_mtime="$current_mtime"
 
-    # Reset and reload
+    # Reset and reload. _ccm_profile_paths is cleared too: a reorder remaps
+    # account numbers, so cached number → path entries can go stale.
     _ccm_bindings=()
+    _ccm_profile_paths=()
     _ccm_active_account=$(command jq -r '.activeAccountNumber // empty' "$_ccm_seq_file" 2>/dev/null)
 
     local pairs
@@ -2628,16 +2632,29 @@ _ccm_check_binding() {
     while [[ -n "$dir" ]]; do
         if [[ -n "${_ccm_bindings[$dir]+x}" ]]; then
             local bound_account="${_ccm_bindings[$dir]}"
-            if [[ "$bound_account" != "$_ccm_active_account" ]]; then
-                local profile_path
+            local profile_path="${_ccm_profile_paths[$bound_account]:-}"
+
+            # Resolve once per account per shell. 'ccm switch --isolated
+            # --quiet' is idempotent and prints the profile path.
+            if [[ -z "$profile_path" ]]; then
                 profile_path=$(command ccm switch --isolated --quiet "$bound_account" 2>/dev/null)
                 if [[ -n "$profile_path" && -d "$profile_path" ]]; then
+                    _ccm_profile_paths[$bound_account]="$profile_path"
+                fi
+            fi
+
+            if [[ -n "$profile_path" && -d "$profile_path" ]]; then
+                # Compare against the variable this hook actually manages, not
+                # the default account number. Comparing account numbers meant a
+                # directory bound to the DEFAULT account never exported, and a
+                # stale CLAUDE_CONFIG_DIR was never corrected. See issue #9.
+                if [[ "${CLAUDE_CONFIG_DIR:-}" != "$profile_path" ]]; then
                     export CLAUDE_CONFIG_DIR="$profile_path"
                     _ccm_active_account="$bound_account"
                     echo "[ccm] Isolated profile active: ${profile_path##*/} (account $bound_account)"
-                else
-                    echo "[ccm] Failed to activate isolated profile for account $bound_account" >&2
                 fi
+            else
+                echo "[ccm] Failed to activate isolated profile for account $bound_account" >&2
             fi
             return 0
         fi
